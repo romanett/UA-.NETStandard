@@ -1397,7 +1397,7 @@ namespace Opc.Ua.Gds.Tests
             }
         }
 
-        [Test, Order(910)]
+        [Test, Order(911)]
         public void UnregisterInvalidApplications()
         {
             ConnectGDS(true);
