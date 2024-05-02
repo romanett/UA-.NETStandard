@@ -38,13 +38,13 @@
 
     <!-- WARNING: The following setting (to automatically accept untrusted certificates) should be used
     for easy debugging purposes ONLY and turned off for production deployments! -->
-    <AutoAcceptUntrustedCertificates>false</AutoAcceptUntrustedCertificates>
+    <AutoAcceptUntrustedCertificates>true</AutoAcceptUntrustedCertificates>
 
     <!-- WARNING: SHA1 signed certificates are by default rejected and should be phased out. 
        only nano and embedded profiles are allowed to use sha1 signed certificates. -->
-    <RejectSHA1SignedCertificates>true</RejectSHA1SignedCertificates>
+    <RejectSHA1SignedCertificates>false</RejectSHA1SignedCertificates>
     <RejectUnknownRevocationStatus>true</RejectUnknownRevocationStatus>
-    <MinimumCertificateKeySize>2048</MinimumCertificateKeySize>
+    <MinimumCertificateKeySize>1048</MinimumCertificateKeySize>
     <AddAppCertToTrustedStore>false</AddAppCertToTrustedStore>
     <SendCertificateChain>true</SendCertificateChain>
 
@@ -74,7 +74,6 @@
   </TransportQuotas>
   <ServerConfiguration>
     <BaseAddresses>
-      <ua:String>opc.https://localhost:62540/Quickstarts/ReferenceServer</ua:String>
       <ua:String>opc.tcp://localhost:62541/Quickstarts/ReferenceServer</ua:String>
     </BaseAddresses>
     <!-- 
@@ -97,20 +96,8 @@
     -->
     <SecurityPolicies>
       <ServerSecurityPolicy>
-        <SecurityMode>SignAndEncrypt_3</SecurityMode>
-        <SecurityPolicyUri>http://opcfoundation.org/UA/SecurityPolicy#Basic256Sha256</SecurityPolicyUri>
-      </ServerSecurityPolicy>
-      <ServerSecurityPolicy>
         <SecurityMode>None_1</SecurityMode>
         <SecurityPolicyUri>http://opcfoundation.org/UA/SecurityPolicy#None</SecurityPolicyUri>
-      </ServerSecurityPolicy>
-      <ServerSecurityPolicy>
-        <SecurityMode>Sign_2</SecurityMode>
-        <SecurityPolicyUri></SecurityPolicyUri>
-      </ServerSecurityPolicy>
-      <ServerSecurityPolicy>
-        <SecurityMode>SignAndEncrypt_3</SecurityMode>
-        <SecurityPolicyUri></SecurityPolicyUri>
       </ServerSecurityPolicy>
       <!-- deprecated security policies for reference only 
       <ServerSecurityPolicy>
@@ -138,27 +125,26 @@
 
     <!-- The SDK expects the server to support the same set of user tokens for every endpoint. -->
     <UserTokenPolicies>
-      <!-- Allows anonymous users -->
+
       <ua:UserTokenPolicy>
-        <ua:TokenType>Anonymous_0</ua:TokenType>
-        <!-- <ua:SecurityPolicyUri>http://opcfoundation.org/UA/SecurityPolicy#None</ua:SecurityPolicyUri> -->
+        <ua:TokenType>UserName_1</ua:TokenType>
+        <ua:PolicyId>AES128</ua:PolicyId>
+        <!-- passwords must be encrypted - this specifies what algorithm to use -->
+        <!-- if no algorithm is specified, the active security policy is used -->
+        <ua:SecurityPolicyUri>http://opcfoundation.org/UA/SecurityPolicy#Basic128Rsa15</ua:SecurityPolicyUri>
       </ua:UserTokenPolicy>
 
       <!-- Allows username/password -->
       <ua:UserTokenPolicy>
         <ua:TokenType>UserName_1</ua:TokenType>
+        <ua:PolicyId>AES256</ua:PolicyId>
         <!-- passwords must be encrypted - this specifies what algorithm to use -->
         <!-- if no algorithm is specified, the active security policy is used -->
-        <!-- <ua:SecurityPolicyUri>http://opcfoundation.org/UA/SecurityPolicy#Basic256Sha256</ua:SecurityPolicyUri> -->
+         <ua:SecurityPolicyUri>http://opcfoundation.org/UA/SecurityPolicy#Aes256_Sha256_RsaPss</ua:SecurityPolicyUri> 
       </ua:UserTokenPolicy>
 
-      <!-- Allows user certificates -->
-      <ua:UserTokenPolicy>
-        <ua:TokenType>Certificate_2</ua:TokenType>
-        <!-- certificate possession must be proven with a digital signature - this specifies what algorithm to use -->
-        <!-- if no algorithm is specified, the active security policy is used -->
-        <!-- <ua:SecurityPolicyUri>http://opcfoundation.org/UA/SecurityPolicy#Basic256Sha256</ua:SecurityPolicyUri> -->
-      </ua:UserTokenPolicy>
+     
+
     </UserTokenPolicies>
     <DiagnosticsEnabled>true</DiagnosticsEnabled>
     <!-- Settings for CTT testing -->
