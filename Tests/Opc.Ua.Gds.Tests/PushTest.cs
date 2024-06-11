@@ -42,6 +42,7 @@ using Opc.Ua.Security.Certificates;
 using Opc.Ua.Test;
 using OpcUa = Opc.Ua;
 using Assert = NUnit.Framework.Legacy.ClassicAssert;
+using System.Collections.Generic;
 
 
 namespace Opc.Ua.Gds.Tests
@@ -613,7 +614,7 @@ namespace Opc.Ua.Gds.Tests
             }, Throws.Exception);
 
             m_pushClient.PushClient.GetCertificates(m_pushClient.PushClient.DefaultApplicationGroup, out NodeId[] certificateTypeIds, out byte[][] certificates);
-            
+
             Assert.That(certificateTypeIds.Length == 1);
             Assert.NotNull(certificates[0]);
             using (var x509 = new X509Certificate2(certificates[0]))
@@ -729,6 +730,22 @@ namespace Opc.Ua.Gds.Tests
                 certificateBlob,
                 serverCertificate.RawData
                 );
+
+            //verify Endpoint Descriptions contain the correct Certificate
+            var client = DiscoveryClient.Create(new Uri(m_pushClient.PushClient.EndpointUrl));
+
+            // get the endpoints.
+            IEnumerable<EndpointDescription> endpoints = client.GetEndpoints(null)
+                .Where(endpoint => endpoint.ServerCertificate != null);
+
+            foreach (EndpointDescription endpoint in endpoints)
+            {
+                X509Certificate2 endpointCertificate = Utils.ParseCertificateBlob(endpoint.ServerCertificate);
+                Assert.AreEqual(
+                    certificateBlob,
+                    endpointCertificate.RawData
+                    );
+            }
         }
 
         private async Task<bool> AddTrustListToStore(SecurityConfiguration config, TrustListDataType trustList)
