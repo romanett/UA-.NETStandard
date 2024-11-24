@@ -208,19 +208,11 @@ namespace Opc.Ua.Server
                     return;
                 }
 
-                for (int ii = 0; ii < EventMonitoredItems.Count; ii++)
-                {
-                    IEventMonitoredItem monitoredItem = EventMonitoredItems[ii];
-                    // enqueue event for role permission validation
-                    eventMonitoredItems.Add(monitoredItem);
-                }
+                // enqueue event for role permission validation
+                eventMonitoredItems.AddRange(EventMonitoredItems);
             }
 
-            for (int ii = 0; ii < eventMonitoredItems.Count; ii++)
-            {
-
-                IEventMonitoredItem monitoredItem = eventMonitoredItems[ii];
-
+            Parallel.ForEach(eventMonitoredItems, (IEventMonitoredItem monitoredItem) => {
                 #region  Filter out audit events in case the Server_Auditing values is false or the channel is not encrypted
 
                 if (e is AuditEventState)
@@ -228,7 +220,7 @@ namespace Opc.Ua.Server
                     // check Server.Auditing flag and skip if false
                     if (!NodeManager.Server.Auditing)
                     {
-                        continue;
+                        return;
                     }
                     else
                     {
@@ -236,7 +228,7 @@ namespace Opc.Ua.Server
                         if (monitoredItem?.Session?.EndpointDescription?.SecurityMode != MessageSecurityMode.SignAndEncrypt &&
                             monitoredItem?.Session?.EndpointDescription?.TransportProfileUri != Profiles.HttpsBinaryTransport)
                         {
-                            continue;
+                            return;
                         }
                     }
                 }
@@ -248,31 +240,21 @@ namespace Opc.Ua.Server
                 if (ServiceResult.IsBad(validationResult))
                 {
                     // skip event reporting for EventType without permissions
-                    continue;
+                    return;
                 }
 
-                lock (NodeManager.Lock)
+                // ensure Condition Refresh call only updates the MonitoredItems on the same session 
+                if (context?.SessionId != null && monitoredItem?.Session?.Id?.Identifier != null)
                 {
-                    // enqueue event
-                    if (context?.SessionId != null && monitoredItem?.Session?.Id?.Identifier != null)
+                    if (!monitoredItem.Session.Id.Identifier.Equals(context.SessionId.Identifier))
                     {
-                        if (monitoredItem.Session.Id.Identifier.Equals(context.SessionId.Identifier))
-                        {
-                            monitoredItem?.QueueEvent(e);
-                        }
-                        else
-                        {
-                            continue;
-                        }
+                        return;
                     }
-                    else
-                    {
-                        monitoredItem?.QueueEvent(e);
-                    }
-
                 }
-            }
-        }        
+                // enqueue event
+                monitoredItem?.QueueEvent(e);
+            });
+        }
 
         /// <summary>
         /// Called when the state of a Node changes.
@@ -282,6 +264,9 @@ namespace Opc.Ua.Server
         /// <param name="changes">The mask indicating what changes have occurred.</param>
         public void OnMonitoredNodeChanged(ISystemContext context, NodeState node, NodeStateChangeMasks changes)
         {
+
+            var dataChangeMonitoredItems = new List<MonitoredItem>();
+
             lock (NodeManager.Lock)
             {
                 if (DataChangeMonitoredItems == null)
@@ -289,21 +274,24 @@ namespace Opc.Ua.Server
                     return;
                 }
 
-                Parallel.ForEach(DataChangeMonitoredItems, (MonitoredItem monitoredItem) => {
-
-                    if (monitoredItem.AttributeId == Attributes.Value && (changes & NodeStateChangeMasks.Value) != 0)
-                    {
-                        QueueValue(context, node, monitoredItem);
-                        return;
-                    }
-
-                    if (monitoredItem.AttributeId != Attributes.Value && (changes & NodeStateChangeMasks.NonValue) != 0)
-                    {
-                        QueueValue(context, node, monitoredItem);
-                        return;
-                    }
-                });
+                dataChangeMonitoredItems.AddRange(DataChangeMonitoredItems);
             }
+
+            Parallel.ForEach(DataChangeMonitoredItems, (MonitoredItem monitoredItem) => {
+
+                if (monitoredItem.AttributeId == Attributes.Value && (changes & NodeStateChangeMasks.Value) != 0)
+                {
+                    QueueValue(context, node, monitoredItem);
+                    return;
+                }
+
+                if (monitoredItem.AttributeId != Attributes.Value && (changes & NodeStateChangeMasks.NonValue) != 0)
+                {
+                    QueueValue(context, node, monitoredItem);
+                    return;
+                }
+            });
+
         }
 
         /// <summary>
