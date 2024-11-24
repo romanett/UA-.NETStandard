@@ -29,6 +29,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading.Tasks;
 using Opc.Ua;
 using Opc.Ua.Server;
@@ -199,7 +200,7 @@ namespace Opc.Ua.Server
         /// <param name="e">The event.</param>
         public void OnReportEvent(ISystemContext context, NodeState node, IFilterTarget e)
         {
-            List<IEventMonitoredItem> eventMonitoredItems = new List<IEventMonitoredItem>();
+            List<IEventMonitoredItem> eventMonitoredItems;
 
             lock (NodeManager.Lock)
             {
@@ -208,8 +209,8 @@ namespace Opc.Ua.Server
                     return;
                 }
 
-                // enqueue event for role permission validation
-                eventMonitoredItems.AddRange(EventMonitoredItems);
+                // enqueue event MIs for role permission validation
+                eventMonitoredItems = EventMonitoredItems.ToList();
             }
 
             Parallel.ForEach(eventMonitoredItems, (IEventMonitoredItem monitoredItem) => {
@@ -265,7 +266,7 @@ namespace Opc.Ua.Server
         public void OnMonitoredNodeChanged(ISystemContext context, NodeState node, NodeStateChangeMasks changes)
         {
 
-            var dataChangeMonitoredItems = new List<MonitoredItem>();
+            List<MonitoredItem> dataChangeMonitoredItems;
 
             lock (NodeManager.Lock)
             {
@@ -274,10 +275,10 @@ namespace Opc.Ua.Server
                     return;
                 }
 
-                dataChangeMonitoredItems.AddRange(DataChangeMonitoredItems);
+                dataChangeMonitoredItems = DataChangeMonitoredItems.ToList();
             }
 
-            Parallel.ForEach(DataChangeMonitoredItems, (MonitoredItem monitoredItem) => {
+            Parallel.ForEach(dataChangeMonitoredItems, (MonitoredItem monitoredItem) => {
 
                 if (monitoredItem.AttributeId == Attributes.Value && (changes & NodeStateChangeMasks.Value) != 0)
                 {
