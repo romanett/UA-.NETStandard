@@ -29,6 +29,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Threading.Tasks;
 using Opc.Ua;
 using Opc.Ua.Server;
 
@@ -288,22 +289,20 @@ namespace Opc.Ua.Server
                     return;
                 }
 
-                for (int ii = 0; ii < DataChangeMonitoredItems.Count; ii++)
-                {
-                    MonitoredItem monitoredItem = DataChangeMonitoredItems[ii];
+                Parallel.ForEach(DataChangeMonitoredItems, (MonitoredItem monitoredItem) => {
 
                     if (monitoredItem.AttributeId == Attributes.Value && (changes & NodeStateChangeMasks.Value) != 0)
                     {
                         QueueValue(context, node, monitoredItem);
-                        continue;
+                        return;
                     }
 
                     if (monitoredItem.AttributeId != Attributes.Value && (changes & NodeStateChangeMasks.NonValue) != 0)
                     {
                         QueueValue(context, node, monitoredItem);
-                        continue;
+                        return;
                     }
-                }
+                });
             }
         }
 
