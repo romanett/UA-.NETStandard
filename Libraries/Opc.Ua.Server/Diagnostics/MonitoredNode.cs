@@ -28,6 +28,7 @@
  * ======================================================================*/
 
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using Opc.Ua;
 using Opc.Ua.Server;
@@ -77,7 +78,7 @@ namespace Opc.Ua.Server
         /// <summary>
         /// Gets the current list of data change MonitoredItems.
         /// </summary>
-        public List<MonitoredItem> DataChangeMonitoredItems
+        public ConcurrentDictionary<uint, MonitoredItem> DataChangeMonitoredItems
         {
             get { return m_dataChangeMonitoredItems; }
             private set { m_dataChangeMonitoredItems = value; }
@@ -86,7 +87,7 @@ namespace Opc.Ua.Server
         /// <summary>
         /// Gets the current list of event MonitoredItems.
         /// </summary>
-        public List<IEventMonitoredItem> EventMonitoredItems
+        public ConcurrentDictionary<uint, IEventMonitoredItem> EventMonitoredItems
         {
             get { return m_eventMonitoredItems; }
             private set { m_eventMonitoredItems = value; }
@@ -124,11 +125,14 @@ namespace Opc.Ua.Server
         {
             if (DataChangeMonitoredItems == null)
             {
-                DataChangeMonitoredItems = new List<MonitoredItem>();
+                DataChangeMonitoredItems = new ConcurrentDictionary<uint, MonitoredItem>();
                 Node.OnStateChanged = OnMonitoredNodeChanged;
             }
 
-            DataChangeMonitoredItems.Add(datachangeItem);
+            if (!DataChangeMonitoredItems.TryAdd(datachangeItem.Id, datachangeItem))
+            {
+                throw new ServiceResultException( StatusCodes.BadInternalError, $"MonitoredItem already monitors node with id {Node.NodeId}");
+            }
         }
 
         /// <summary>
@@ -137,14 +141,7 @@ namespace Opc.Ua.Server
         /// <param name="datachangeItem">The monitored item.</param>
         public void Remove(MonitoredItem datachangeItem)
         {
-            for (int ii = 0; ii < DataChangeMonitoredItems.Count; ii++)
-            {
-                if (Object.ReferenceEquals(DataChangeMonitoredItems[ii], datachangeItem))
-                {
-                    DataChangeMonitoredItems.RemoveAt(ii);
-                    break;
-                }
-            }
+            DataChangeMonitoredItems.TryRemove(datachangeItem.Id, out var _);
 
             if (DataChangeMonitoredItems.Count == 0)
             {
@@ -161,11 +158,14 @@ namespace Opc.Ua.Server
         {
             if (EventMonitoredItems == null)
             {
-                EventMonitoredItems = new List<IEventMonitoredItem>();
+                EventMonitoredItems = new ConcurrentDictionary<uint, IEventMonitoredItem>();
                 Node.OnReportEvent = OnReportEvent;
             }
 
-            EventMonitoredItems.Add(eventItem);
+            if (!EventMonitoredItems.TryAdd(eventItem.Id, eventItem))
+            {
+                throw new ServiceResultException(StatusCodes.BadInternalError, $"MonitoredItem already monitors node with id {Node.NodeId}");
+            }
         }
 
         /// <summary>
@@ -174,14 +174,7 @@ namespace Opc.Ua.Server
         /// <param name="eventItem">The monitored item.</param>
         public void Remove(IEventMonitoredItem eventItem)
         {
-            for (int ii = 0; ii < EventMonitoredItems.Count; ii++)
-            {
-                if (Object.ReferenceEquals(EventMonitoredItems[ii], eventItem))
-                {
-                    EventMonitoredItems.RemoveAt(ii);
-                    break;
-                }
-            }
+            DataChangeMonitoredItems.TryRemove(eventItem.Id, out var _);
 
             if (EventMonitoredItems.Count == 0)
             {
@@ -350,8 +343,8 @@ namespace Opc.Ua.Server
         #region Private Fields
         private CustomNodeManager2 m_nodeManager;
         private NodeState m_node;
-        private List<MonitoredItem> m_dataChangeMonitoredItems;
-        private List<IEventMonitoredItem> m_eventMonitoredItems;
+        private ConcurrentDictionary<uint, MonitoredItem> m_dataChangeMonitoredItems;
+        private ConcurrentDictionary<uint, IEventMonitoredItem> m_eventMonitoredItems;
         #endregion
     }
 }
