@@ -841,7 +841,7 @@ namespace Opc.Ua.PubSub.Transport
                 RejectUnknownRevocationStatus = !mqttTlsOptions.IgnoreRevocationListErrors
             };
 
-            certificateValidator.Update(securityConfiguration).Wait();
+            certificateValidator.UpdateAsync(securityConfiguration).Wait();
 
             return certificateValidator;
         }

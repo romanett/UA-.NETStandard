@@ -30,6 +30,7 @@
 using System;
 using System.Diagnostics;
 using System.IO;
+using System.Runtime.InteropServices;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
 using Opc.Ua.Configuration;
@@ -111,7 +112,9 @@ namespace Opc.Ua.Server.Tests
                     .AddPolicy(MessageSecurityMode.SignAndEncrypt, SecurityPolicies.Basic128Rsa15)
                     .AddPolicy(MessageSecurityMode.SignAndEncrypt, SecurityPolicies.Basic256)
                     .AddSignPolicies()
-                    .AddSignAndEncryptPolicies();
+                    .AddSignAndEncryptPolicies()
+                    .AddEccSignPolicies()
+                    .AddEccSignAndEncryptPolicies();
             }
 
             if (OperationLimits)
@@ -145,6 +148,11 @@ namespace Opc.Ua.Server.Tests
                     RejectTimeout = ReverseConnectTimeout / 4
                 });
             }
+            
+            CertificateIdentifierCollection applicationCerts = ApplicationConfigurationBuilder.CreateDefaultApplicationCertificates(
+                "CN=" + typeof(T).Name + ", C=US, S=Arizona, O=OPC Foundation, DC=localhost",
+                CertificateStoreType.Directory,
+                pkiRoot);
 
             if (DurableSubscriptionsEnabled)
             {
@@ -155,7 +163,7 @@ namespace Opc.Ua.Server.Tests
             }
 
             Config = await serverConfig.AddSecurityConfiguration(
-                    "CN=" + typeof(T).Name + ", C=US, S=Arizona, O=OPC Foundation, DC=localhost",
+                    applicationCerts,
                     pkiRoot)
                 .SetAutoAcceptUntrustedCertificates(AutoAccept)
                 .Create().ConfigureAwait(false);
@@ -228,8 +236,8 @@ namespace Opc.Ua.Server.Tests
             }
 
             // check the application certificate.
-            bool haveAppCertificate = await Application.CheckApplicationInstanceCertificate(
-                true, CertificateFactory.DefaultKeySize, CertificateFactory.DefaultLifeTime).ConfigureAwait(false);
+            bool haveAppCertificate = await Application.CheckApplicationInstanceCertificates(
+                true, CertificateFactory.DefaultLifeTime).ConfigureAwait(false);
             if (!haveAppCertificate)
             {
                 throw new Exception("Application instance certificate invalid!");

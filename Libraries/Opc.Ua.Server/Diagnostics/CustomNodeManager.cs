@@ -108,6 +108,8 @@ namespace Opc.Ua.Server
             // create the table of monitored nodes.
             // these are created by the node manager whenever a client subscribe to an attribute of the node.
             m_monitoredNodes = new NodeIdDictionary<MonitoredNode2>();
+
+            m_predefinedNodes = new NodeIdDictionary<NodeState>();
         }
         #endregion
 
@@ -130,7 +132,7 @@ namespace Opc.Ua.Server
             {
                 lock (Lock)
                 {
-                    foreach (NodeState node in m_predefinedNodes?.Values)
+                    foreach (NodeState node in m_predefinedNodes.Values)
                     {
                         Utils.SilentDispose(node);
                     }
@@ -332,7 +334,7 @@ namespace Opc.Ua.Server
         public NodeState Find(NodeId nodeId)
         {
             NodeState node = null;
-            if (m_predefinedNodes?.TryGetValue(nodeId, out node) == true)
+            if (m_predefinedNodes.TryGetValue(nodeId, out node) == true)
             {
                 return node;
             }
@@ -360,11 +362,6 @@ namespace Opc.Ua.Server
 
             lock (Lock)
             {
-                if (m_predefinedNodes == null)
-                {
-                    m_predefinedNodes = new NodeIdDictionary<NodeState>();
-                }
-
                 instance.ReferenceTypeId = referenceTypeId;
 
                 NodeState parent = null;
@@ -401,7 +398,7 @@ namespace Opc.Ua.Server
             List<LocalReference> referencesToRemove = new List<LocalReference>();
 
             NodeState node = null;
-            if (m_predefinedNodes?.TryGetValue(nodeId, out node) != true)
+            if (m_predefinedNodes.TryGetValue(nodeId, out node) != true)
             {
                 return false;
             }
@@ -488,11 +485,6 @@ namespace Opc.Ua.Server
             string resourcePath,
             IDictionary<NodeId, IList<IReference>> externalReferences)
         {
-            if (m_predefinedNodes == null)
-            {
-                m_predefinedNodes = new NodeIdDictionary<NodeState>();
-            }
-
             // load the predefined nodes from an XML document.
             NodeStateCollection predefinedNodes = new NodeStateCollection();
             predefinedNodes.LoadFromResource(context, resourcePath, assembly, true);
@@ -555,11 +547,6 @@ namespace Opc.Ua.Server
         /// </summary>
         protected virtual void AddPredefinedNode(ISystemContext context, NodeState node)
         {
-            if (m_predefinedNodes == null)
-            {
-                m_predefinedNodes = new NodeIdDictionary<NodeState>();
-            }
-
             // assign a default value to any variable in namespace 0
             if (node is BaseVariableState nodeStateVar)
             {
@@ -625,7 +612,7 @@ namespace Opc.Ua.Server
             NodeState node,
             List<LocalReference> referencesToRemove)
         {
-            if (m_predefinedNodes?.TryRemove(node.NodeId, out _) != true)
+            if (m_predefinedNodes.TryRemove(node.NodeId, out _) != true)
             {
                 return;
             }
@@ -698,7 +685,7 @@ namespace Opc.Ua.Server
         /// <param name="externalReferences">A list of references to add to external targets.</param>
         protected virtual void AddReverseReferences(IDictionary<NodeId, IList<IReference>> externalReferences)
         {
-            foreach (NodeState source in m_predefinedNodes?.Values)
+            foreach (NodeState source in m_predefinedNodes.Values)
             {
                 IList<IReference> references = new List<IReference>();
                 source.GetReferences(SystemContext, references);
@@ -867,15 +854,12 @@ namespace Opc.Ua.Server
         /// </summary>
         public virtual void DeleteAddressSpace()
         {
-            if (m_predefinedNodes != null)
-            {
-                var nodes = m_predefinedNodes.Values.ToArray();
-                m_predefinedNodes.Clear();
+            var nodes = m_predefinedNodes.Values.ToArray();
+            m_predefinedNodes.Clear();
 
-                foreach (NodeState node in nodes)
-                {
-                    Utils.SilentDispose(node);
-                }
+            foreach (NodeState node in nodes)
+            {
+                Utils.SilentDispose(node);
             }
         }
 
@@ -906,7 +890,7 @@ namespace Opc.Ua.Server
             }
 
             NodeState node = null;
-            if (m_predefinedNodes?.TryGetValue(nodeId, out node) == true)
+            if (m_predefinedNodes.TryGetValue(nodeId, out node) == true)
             {
                 var handle = new NodeHandle
                 {
@@ -2956,7 +2940,7 @@ namespace Opc.Ua.Server
                     }
 
                     // validate the role permissions for method to be executed,
-                    // it may be a diferent MethodState that does not have the MethodId specified in the method call
+                    // it may be a different MethodState that does not have the MethodId specified in the method call
                     errors[ii] = ValidateRolePermissions(context,
                         method.NodeId,
                         PermissionType.Call);
