@@ -1734,7 +1734,6 @@ namespace Opc.Ua.Client.Tests
             }
         }
 #endif
-#endregion
 
         /// <summary>
         /// Happy SetSubscriptionDurable
