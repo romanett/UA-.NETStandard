@@ -227,6 +227,21 @@ namespace Opc.Ua.Server.Tests
             base.AddPredefinedNode(context, node);
         }
 
+        public new virtual ServiceResult CreateMonitoredItem(
+           ServerSystemContext context,
+           NodeHandle handle,
+           uint subscriptionId,
+           double publishingInterval,
+           DiagnosticsMasks diagnosticsMasks,
+           TimestampsToReturn timestampsToReturn,
+           MonitoredItemCreateRequest itemToCreate,
+           ref long globalIdCounter,
+           out MonitoringFilterResult filterResult,
+           out IMonitoredItem monitoredItem)
+        {
+            return base.CreateMonitoredItem(context, handle, subscriptionId, publishingInterval, diagnosticsMasks, timestampsToReturn, itemToCreate, ref globalIdCounter, out filterResult, out monitoredItem);
+        }
+
         #endregion
     }
 }

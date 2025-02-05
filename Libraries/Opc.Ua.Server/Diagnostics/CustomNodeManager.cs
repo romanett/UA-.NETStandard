@@ -1973,7 +1973,7 @@ namespace Opc.Ua.Server
 
                 if (propertyState != null && property != null && propertyState.NodeId == property.NodeId && !Utils.IsEqual(newPropertyValue, previousPropertyValue))
                 {
-                    foreach (var monitoredItem in monitoredNode.DataChangeMonitoredItems)
+                    foreach (var monitoredItem in monitoredNode.DataChangeMonitoredItems.Values)
                     {
                         if (monitoredItem.AttributeId == Attributes.Value)
                         {

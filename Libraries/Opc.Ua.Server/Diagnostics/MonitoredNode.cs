@@ -28,7 +28,9 @@
  * ======================================================================*/
 
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Threading.Tasks;
 using Opc.Ua;
 using Opc.Ua.Server;
 
@@ -77,7 +79,7 @@ namespace Opc.Ua.Server
         /// <summary>
         /// Gets the current list of data change MonitoredItems.
         /// </summary>
-        public List<MonitoredItem> DataChangeMonitoredItems
+        public ConcurrentDictionary<uint,MonitoredItem> DataChangeMonitoredItems
         {
             get { return m_dataChangeMonitoredItems; }
             private set { m_dataChangeMonitoredItems = value; }
@@ -124,11 +126,11 @@ namespace Opc.Ua.Server
         {
             if (DataChangeMonitoredItems == null)
             {
-                DataChangeMonitoredItems = new List<MonitoredItem>();
+                DataChangeMonitoredItems = new ConcurrentDictionary<uint, MonitoredItem>();
                 Node.OnStateChanged = OnMonitoredNodeChanged;
             }
 
-            DataChangeMonitoredItems.Add(datachangeItem);
+            DataChangeMonitoredItems.TryAdd(datachangeItem.Id, datachangeItem);
         }
 
         /// <summary>
@@ -137,14 +139,7 @@ namespace Opc.Ua.Server
         /// <param name="datachangeItem">The monitored item.</param>
         public void Remove(MonitoredItem datachangeItem)
         {
-            for (int ii = 0; ii < DataChangeMonitoredItems.Count; ii++)
-            {
-                if (Object.ReferenceEquals(DataChangeMonitoredItems[ii], datachangeItem))
-                {
-                    DataChangeMonitoredItems.RemoveAt(ii);
-                    break;
-                }
-            }
+            DataChangeMonitoredItems.TryRemove(datachangeItem.Id, out _);
 
             if (DataChangeMonitoredItems.Count == 0)
             {
@@ -271,7 +266,7 @@ namespace Opc.Ua.Server
 
                 }
             }
-        }        
+        }
 
         /// <summary>
         /// Called when the state of a Node changes.
@@ -281,38 +276,30 @@ namespace Opc.Ua.Server
         /// <param name="changes">The mask indicating what changes have occurred.</param>
         public void OnMonitoredNodeChanged(ISystemContext context, NodeState node, NodeStateChangeMasks changes)
         {
-            lock (NodeManager.Lock)
+            //ensure DataChange is enqueued for all MIs before the next DataChange can start enqueueing
+            lock (m_lock)
             {
-                if (DataChangeMonitoredItems == null)
-                {
-                    return;
-                }
-
-                for (int ii = 0; ii < DataChangeMonitoredItems.Count; ii++)
-                {
-                    MonitoredItem monitoredItem = DataChangeMonitoredItems[ii];
-
+                Parallel.ForEach(DataChangeMonitoredItems?.Values, (monitoredItem) => {
                     if (monitoredItem.AttributeId == Attributes.Value && (changes & NodeStateChangeMasks.Value) != 0)
                     {
-                        // validate if the monitored item has the required role permissions to read the value
                         ServiceResult validationResult = NodeManager.ValidateRolePermissions(new OperationContext(monitoredItem), node.NodeId, PermissionType.Read);
-
+                        // validate if the monitored item has the required role permissions to read the value
                         if (ServiceResult.IsBad(validationResult))
                         {
                             // skip if the monitored item does not have permission to read
-                            continue;
+                            return;
                         }
 
                         QueueValue(context, node, monitoredItem);
-                        continue;
+                        return;
                     }
 
                     if (monitoredItem.AttributeId != Attributes.Value && (changes & NodeStateChangeMasks.NonValue) != 0)
                     {
                         QueueValue(context, node, monitoredItem);
-                        continue;
+                        return;
                     }
-                }
+                });
             }
         }
 
@@ -349,8 +336,9 @@ namespace Opc.Ua.Server
 
         #region Private Fields
         private CustomNodeManager2 m_nodeManager;
+        private readonly object m_lock = new object();
         private NodeState m_node;
-        private List<MonitoredItem> m_dataChangeMonitoredItems;
+        private ConcurrentDictionary<uint, MonitoredItem> m_dataChangeMonitoredItems;
         private List<IEventMonitoredItem> m_eventMonitoredItems;
         #endregion
     }
