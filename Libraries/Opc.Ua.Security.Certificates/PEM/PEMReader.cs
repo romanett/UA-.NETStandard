@@ -41,7 +41,7 @@ namespace Opc.Ua.Security.Certificates
     /// </summary>
     public static class PEMReader
     {
-#region Public Methods
+        #region Public Methods
         /// <summary>
         /// Import a PKCS#8 private key or RSA private key from PEM.
         /// The PKCS#8 private key may be encrypted using a password.
@@ -156,7 +156,7 @@ namespace Opc.Ua.Security.Certificates
                     // Extract the base64-encoded section
                     string pemData = pemText.Substring(beginIndex, endIndex - beginIndex).Trim();
                     byte[] decodedBytes = new byte[pemData.Length];
-                    if(Convert.TryFromBase64Chars(pemData, decodedBytes, out int bytesDecoded))
+                    if (Convert.TryFromBase64Chars(pemData, decodedBytes, out int bytesDecoded))
                     {
                         // Resize array to actual decoded length
                         Array.Resize(ref decodedBytes, bytesDecoded);
@@ -203,8 +203,8 @@ namespace Opc.Ua.Security.Certificates
         }
 #endregion
 
-#region Private Methods
-#endregion
+        #region Private Methods
+        #endregion
     }
 }
 #endif
