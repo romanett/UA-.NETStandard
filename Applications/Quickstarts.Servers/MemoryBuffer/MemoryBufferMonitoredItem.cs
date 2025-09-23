@@ -27,9 +27,6 @@
  * http://opcfoundation.org/License/MIT/1.00/
  * ======================================================================*/
 
-using System;
-using System.Collections.Generic;
-using System.Text;
 using Opc.Ua;
 using Opc.Ua.Server;
 
@@ -46,7 +43,7 @@ namespace MemoryBuffer
         public MemoryBufferMonitoredItem(
             IServerInternal server,
             INodeManager nodeManager,
-            object mangerHandle,
+            object managerHandle,
             uint offset,
             uint subscriptionId,
             uint id,
@@ -57,16 +54,16 @@ namespace MemoryBuffer
             uint clientHandle,
             MonitoringFilter originalFilter,
             MonitoringFilter filterToUse,
-            Opc.Ua.Range range,
+            Range range,
             double samplingInterval,
             uint queueSize,
             bool discardOldest,
-            double minimumSamplingInterval)
-        :
-            base(
+            double minimumSamplingInterval,
+            bool createDurable)
+            : base(
                 server,
                 nodeManager,
-                mangerHandle,
+                managerHandle,
                 subscriptionId,
                 id,
                 itemToMonitor,
@@ -80,9 +77,24 @@ namespace MemoryBuffer
                 samplingInterval,
                 queueSize,
                 discardOldest,
-                minimumSamplingInterval)
+                minimumSamplingInterval,
+                createDurable)
         {
-            m_offset = offset;
+            Offset = offset;
+        }
+
+        /// <summary>
+        /// Initializes the object from a template
+        /// </summary>
+        public MemoryBufferMonitoredItem(
+            IServerInternal server,
+            INodeManager nodeManager,
+            object managerHandle,
+            uint offset,
+            IStoredMonitoredItem storedMonitoredItem)
+            : base(server, nodeManager, managerHandle, storedMonitoredItem)
+        {
+            Offset = offset;
         }
 
         /// <summary>
@@ -94,7 +106,8 @@ namespace MemoryBuffer
             uint clientHandle,
             double samplingInterval)
         {
-            return base.ModifyAttributes(diagnosticsMasks,
+            return ModifyAttributes(
+                diagnosticsMasks,
                 timestampsToReturn,
                 clientHandle,
                 null,
@@ -108,14 +121,6 @@ namespace MemoryBuffer
         /// <summary>
         /// The offset in the memory buffer.
         /// </summary>
-        public uint Offset
-        {
-            get
-            {
-                return m_offset;
-            }
-        }
-
-        private uint m_offset;
+        public uint Offset { get; }
     }
 }

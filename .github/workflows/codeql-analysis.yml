@@ -3,7 +3,7 @@ name: "CodeQL"
 
 on:
   push:
-    branches: [ master, main, release/* ]
+    branches: [ master, main, release/*, develop/* ]
   pull_request:
     # The branches below must be a subset of the branches above
     branches: [ master, main ]
@@ -20,7 +20,7 @@ concurrency:
 jobs:
   analyze:
     name: Analyze
-    runs-on: windows-2022
+    runs-on: windows-2025
 
     strategy:
       fail-fast: false
@@ -32,7 +32,7 @@ jobs:
 
     steps:
     - name: Checkout repository
-      uses: actions/checkout@v4
+      uses: actions/checkout@v5
 
     # Initializes the CodeQL tools for scanning.
     - name: Initialize CodeQL
@@ -45,7 +45,7 @@ jobs:
         # queries: ./path/to/local/query, your-org/your-repo/queries@main
         
     - name: Set up .NET
-      uses: actions/setup-dotnet@v4
+      uses: actions/setup-dotnet@v5
       with:
         dotnet-version: '8.x'
 

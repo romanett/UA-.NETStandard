@@ -10,7 +10,8 @@
    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
 */
 
-using System;
+using System.Threading;
+using System.Threading.Tasks;
 
 namespace Opc.Ua
 {
@@ -21,29 +22,29 @@ namespace Opc.Ua
     public interface ITransportListenerCallback : IAuditEventCallback
     {
         /// <summary>
-        /// Begins processing a request received via a binary encoded channel.
+        /// Processes a request received via a binary encoded channel.
         /// </summary>
-        /// <param name="channeId">A unique identifier for the secure channel which is the source of the request.</param>
+        /// <param name="channelId">A unique identifier for the secure channel which is the source of the request.</param>
         /// <param name="endpointDescription">The description of the endpoint which the secure channel is using.</param>
         /// <param name="request">The incoming request.</param>
-        /// <param name="callback">The callback.</param>
-        /// <param name="callbackData">The callback data.</param>
-        /// <returns>The result which must be passed to the EndProcessRequest method.</returns>
-        /// <seealso cref="EndProcessRequest" />
-        /// <seealso cref="ITransportListener" />
-        IAsyncResult BeginProcessRequest(
-            string channeId,
+        /// <param name="cancellationToken">The cancellation token.</param>
+        /// <returns>The response to return over the secure channel.</returns>
+        Task<IServiceResponse> ProcessRequestAsync(
+            string channelId,
             EndpointDescription endpointDescription,
             IServiceRequest request,
-            AsyncCallback callback,
-            object callbackData);
+            CancellationToken cancellationToken = default);
 
         /// <summary>
-        /// Ends processing a request received via a binary encoded channel.
+        /// Trys to get the secure channel id for an authentication token.
+        /// The ChannelId is known to the sessions of the Server.
+        /// Each session has an AuthenticationToken which can be used to identify the session.
         /// </summary>
-        /// <param name="result">The result returned by the BeginProcessRequest method.</param>
-        /// <returns>The response to return over the secure channel.</returns>
-        /// <seealso cref="BeginProcessRequest" />
-        IServiceResponse EndProcessRequest(IAsyncResult result);
+        /// <param name="authenticationToken">The AuthenticationToken from the RequestHeader</param>
+        /// <param name="channelId">The Channel id</param>
+        /// <returns>returns true if a channelId was found for the provided AuthenticationToken</returns>
+        bool TryGetSecureChannelIdForAuthenticationToken(
+            NodeId authenticationToken,
+            out uint channelId);
     }
 }

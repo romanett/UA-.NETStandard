@@ -29,9 +29,7 @@
 
 using System;
 using System.Collections.Generic;
-using System.Text;
 using System.Threading;
-using System.Security.Principal;
 
 namespace Opc.Ua.Server
 {
@@ -40,27 +38,24 @@ namespace Opc.Ua.Server
     /// </summary>
     public class EventManager : IDisposable
     {
-        #region Constructors
         /// <summary>
         /// Creates a new instance of a sampling group.
         /// </summary>
-        public EventManager(IServerInternal server, uint maxQueueSize)
+        public EventManager(IServerInternal server, uint maxQueueSize, uint maxDurableQueueSize)
         {
-            if (server == null) throw new ArgumentNullException(nameof(server));
-
-            m_server = server;
-            m_monitoredItems = new Dictionary<uint,IEventMonitoredItem>();
+            m_server = server ?? throw new ArgumentNullException(nameof(server));
+            m_monitoredItems = [];
             m_maxEventQueueSize = maxQueueSize;
+            m_maxDurableEventQueueSize = maxDurableQueueSize;
         }
-        #endregion
 
-        #region IDisposable Members
         /// <summary>
         /// Frees any unmanaged resources.
         /// </summary>
         public void Dispose()
         {
             Dispose(true);
+            GC.SuppressFinalize(this);
         }
 
         /// <summary>
@@ -74,7 +69,7 @@ namespace Opc.Ua.Server
 
                 lock (m_lock)
                 {
-                    monitoredItems = new List<IEventMonitoredItem>(m_monitoredItems.Values);
+                    monitoredItems = [.. m_monitoredItems.Values];
                     m_monitoredItems.Clear();
                 }
 
@@ -84,15 +79,17 @@ namespace Opc.Ua.Server
                 }
             }
         }
-        #endregion
 
-        #region Public Methods
         /// <summary>
         /// Reports an event.
         /// </summary>
+        /// <exception cref="ArgumentNullException"><paramref name="e"/> is <c>null</c>.</exception>
         public static void ReportEvent(IFilterTarget e, IList<IEventMonitoredItem> monitoredItems)
         {
-            if (e == null) throw new ArgumentNullException(nameof(e));
+            if (e == null)
+            {
+                throw new ArgumentNullException(nameof(e));
+            }
 
             foreach (IEventMonitoredItem monitoredItem in monitoredItems)
             {
@@ -103,42 +100,17 @@ namespace Opc.Ua.Server
         /// <summary>
         /// Creates a set of monitored items.
         /// </summary>
-        [Obsolete("Replaced by variant that includes the publishingInterval")]
-        public MonitoredItem CreateMonitoredItem(
-            OperationContext           context,
-            INodeManager               nodeManager,
-            object                     handle,
-            uint                       subscriptionId,
-            uint                       monitoredItemId,
-            TimestampsToReturn         timestampsToReturn,
+        public IEventMonitoredItem CreateMonitoredItem(
+            OperationContext context,
+            INodeManager nodeManager,
+            object handle,
+            uint subscriptionId,
+            uint monitoredItemId,
+            TimestampsToReturn timestampsToReturn,
+            double publishingInterval,
             MonitoredItemCreateRequest itemToCreate,
-            EventFilter                filter)
-        {
-            return CreateMonitoredItem(
-                context,
-                nodeManager,
-                handle,
-                subscriptionId,
-                monitoredItemId,
-                timestampsToReturn,
-                0,
-                itemToCreate,
-                filter);
-        }
-
-        /// <summary>
-        /// Creates a set of monitored items.
-        /// </summary>
-        public MonitoredItem CreateMonitoredItem(
-            OperationContext           context,
-            INodeManager               nodeManager,
-            object                     handle,
-            uint                       subscriptionId,
-            uint                       monitoredItemId,
-            TimestampsToReturn         timestampsToReturn,
-            double                     publishingInterval,
-            MonitoredItemCreateRequest itemToCreate,
-            EventFilter                filter)
+            EventFilter filter,
+            bool createDurable)
         {
             lock (m_lock)
             {
@@ -151,15 +123,12 @@ namespace Opc.Ua.Server
                 }
 
                 // limit the queue size.
-                uint queueSize = itemToCreate.RequestedParameters.QueueSize;
-
-                if (queueSize > m_maxEventQueueSize)
-                {
-                    queueSize = m_maxEventQueueSize;
-                }
+                uint revisedQueueSize = CalculateRevisedQueueSize(
+                    createDurable,
+                    itemToCreate.RequestedParameters.QueueSize);
 
                 // create the monitored item.
-                MonitoredItem monitoredItem = new MonitoredItem(
+                IEventMonitoredItem monitoredItem = new MonitoredItem(
                     m_server,
                     nodeManager,
                     handle,
@@ -174,9 +143,10 @@ namespace Opc.Ua.Server
                     filter,
                     null,
                     samplingInterval,
-                    queueSize,
+                    revisedQueueSize,
                     itemToCreate.RequestedParameters.DiscardOldest,
-                    MinimumSamplingIntervals.Continuous);
+                    MinimumSamplingIntervals.Continuous,
+                    createDurable);
 
                 // save the monitored item.
                 m_monitoredItems.Add(monitoredItemId, monitoredItem);
@@ -186,14 +156,61 @@ namespace Opc.Ua.Server
         }
 
         /// <summary>
+        /// Restore a MonitoredItem after a restart
+        /// </summary>
+        public IEventMonitoredItem RestoreMonitoredItem(
+            INodeManager nodeManager,
+            object handle,
+            IStoredMonitoredItem storedMonitoredItem)
+        {
+            lock (m_lock)
+            {
+                // limit the queue size.
+                storedMonitoredItem.QueueSize = CalculateRevisedQueueSize(
+                    storedMonitoredItem.IsDurable,
+                    storedMonitoredItem.QueueSize);
+
+                // create the monitored item.
+                var monitoredItem = new MonitoredItem(
+                    m_server,
+                    nodeManager,
+                    handle,
+                    storedMonitoredItem);
+
+                // save the monitored item.
+                m_monitoredItems.Add(monitoredItem.Id, monitoredItem);
+
+                return monitoredItem;
+            }
+        }
+
+        /// <summary>
+        /// calculates a revised queue size based on the application confiugration limits
+        /// </summary>
+        private uint CalculateRevisedQueueSize(bool isDurable, uint queueSize)
+        {
+            if (queueSize > m_maxEventQueueSize && !isDurable)
+            {
+                queueSize = m_maxEventQueueSize;
+            }
+
+            if (queueSize > m_maxDurableEventQueueSize && isDurable)
+            {
+                queueSize = m_maxDurableEventQueueSize;
+            }
+
+            return queueSize;
+        }
+
+        /// <summary>
         /// Modifies a monitored item.
         /// </summary>
         public void ModifyMonitoredItem(
-            OperationContext           context,
-            IEventMonitoredItem        monitoredItem,
-            TimestampsToReturn         timestampsToReturn,
+            OperationContext context,
+            IEventMonitoredItem monitoredItem,
+            TimestampsToReturn timestampsToReturn,
             MonitoredItemModifyRequest itemToModify,
-            EventFilter                filter)
+            EventFilter filter)
         {
             lock (m_lock)
             {
@@ -204,12 +221,9 @@ namespace Opc.Ua.Server
                 }
 
                 // limit the queue size.
-                uint queueSize = itemToModify.RequestedParameters.QueueSize;
-
-                if (queueSize > m_maxEventQueueSize)
-                {
-                    queueSize = m_maxEventQueueSize;
-                }
+                uint revisedQueueSize = CalculateRevisedQueueSize(
+                    monitoredItem.IsDurable,
+                    itemToModify.RequestedParameters.QueueSize);
 
                 // modify the attributes.
                 monitoredItem.ModifyAttributes(
@@ -220,7 +234,7 @@ namespace Opc.Ua.Server
                     filter,
                     null,
                     itemToModify.RequestedParameters.SamplingInterval,
-                    queueSize,
+                    revisedQueueSize,
                     itemToModify.RequestedParameters.DiscardOldest);
             }
         }
@@ -243,16 +257,14 @@ namespace Opc.Ua.Server
         {
             lock (m_lock)
             {
-                return new List<IEventMonitoredItem>(m_monitoredItems.Values);
+                return [.. m_monitoredItems.Values];
             }
         }
-        #endregion
 
-        #region Private Fields
-        private readonly object m_lock = new object();
-        private IServerInternal m_server;
-        private Dictionary<uint, IEventMonitoredItem> m_monitoredItems;
-        private uint m_maxEventQueueSize;
-        #endregion
+        private readonly Lock m_lock = new();
+        private readonly IServerInternal m_server;
+        private readonly Dictionary<uint, IEventMonitoredItem> m_monitoredItems;
+        private readonly uint m_maxEventQueueSize;
+        private readonly uint m_maxDurableEventQueueSize;
     }
 }

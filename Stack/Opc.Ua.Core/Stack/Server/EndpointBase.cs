@@ -14,21 +14,22 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Security.Cryptography.X509Certificates;
+using System.Threading;
+using System.Threading.Tasks;
 
 namespace Opc.Ua
 {
     /// <summary>
-	/// A base class for UA endpoints.
-	/// </summary>
+    /// A base class for UA endpoints.
+    /// </summary>
     public abstract class EndpointBase : IEndpointBase, ITransportListenerCallback
     {
-        #region Constructors
         /// <summary>
         /// Initializes the object when it is created by the WCF framework.
         /// </summary>
         protected EndpointBase()
         {
-            SupportedServices = new Dictionary<ExpandedNodeId, ServiceDefinition>();
+            SupportedServices = [];
 
             try
             {
@@ -55,12 +56,10 @@ namespace Opc.Ua
         /// <param name="host">The host.</param>
         protected EndpointBase(IServiceHostBase host)
         {
-            if (host == null) throw new ArgumentNullException(nameof(host));
-
-            m_host = host;
+            m_host = host ?? throw new ArgumentNullException(nameof(host));
             m_server = host.Server;
 
-            SupportedServices = new Dictionary<ExpandedNodeId, ServiceDefinition>();
+            SupportedServices = [];
         }
 
         /// <summary>
@@ -68,66 +67,55 @@ namespace Opc.Ua
         /// </summary>
         protected EndpointBase(ServerBase server)
         {
-            if (server == null) throw new ArgumentNullException(nameof(server));
-
             m_host = null;
-            m_server = server;
+            m_server = server ?? throw new ArgumentNullException(nameof(server));
 
-            SupportedServices = new Dictionary<ExpandedNodeId, ServiceDefinition>();
+            SupportedServices = [];
         }
-        #endregion
 
-        #region ITransportListenerCallback Members
-        /// <summary>
-        /// Begins processing a request received via a binary encoded channel.
-        /// </summary>
-        /// <param name="channeId">A unique identifier for the secure channel which is the source of the request.</param>
-        /// <param name="endpointDescription">The description of the endpoint which the secure channel is using.</param>
-        /// <param name="request">The incoming request.</param>
-        /// <param name="callback">The callback.</param>
-        /// <param name="callbackData">The callback data.</param>
-        /// <returns>
-        /// The result which must be passed to the EndProcessRequest method.
-        /// </returns>
-        /// <seealso cref="EndProcessRequest"/>
-        /// <seealso cref="ITransportListener"/>
-        public IAsyncResult BeginProcessRequest(
-            string channeId,
+        /// <inheritdoc/>
+        public Task<IServiceResponse> ProcessRequestAsync(
+            string channelId,
             EndpointDescription endpointDescription,
             IServiceRequest request,
-            AsyncCallback callback,
-            object callbackData)
+            CancellationToken cancellationToken = default)
         {
-            if (channeId == null) throw new ArgumentNullException(nameof(channeId));
-            if (request == null) throw new ArgumentNullException(nameof(request));
+            if (channelId == null)
+            {
+                throw new ArgumentNullException(nameof(channelId));
+            }
 
-            // create operation.
-            ProcessRequestAsyncResult result = new ProcessRequestAsyncResult(this, callback, callbackData, 0);
+            if (request == null)
+            {
+                throw new ArgumentNullException(nameof(request));
+            }
 
-            SecureChannelContext context = new SecureChannelContext(
-                channeId,
+            var context = new SecureChannelContext(
+                channelId,
                 endpointDescription,
                 RequestEncoding.Binary);
 
-            // begin invoke service.
-            return result.BeginProcessRequest(context, request);
+            var incomingRequest = new EndpointIncomingRequest(this, context, request);
+            return incomingRequest.ProcessAsync(cancellationToken);
         }
 
         /// <summary>
-        /// Ends processing a request received via a binary encoded channel.
+        /// Trys to get the secure channel id for an AuthenticationToken.
+        /// The ChannelId is known to the sessions of the Server.
+        /// Each session has an AuthenticationToken which can be used to identify the session.
         /// </summary>
-        /// <param name="result">The result returned by the BeginProcessRequest method.</param>
-        /// <returns>
-        /// The response to return over the secure channel.
-        /// </returns>
-        /// <seealso cref="BeginProcessRequest"/>
-        public IServiceResponse EndProcessRequest(IAsyncResult result)
+        /// <param name="authenticationToken">The AuthenticationToken from the RequestHeader</param>
+        /// <param name="channelId">The Channel id</param>
+        /// <returns>returns true if a channelId was found for the provided AuthenticationToken</returns>
+        public bool TryGetSecureChannelIdForAuthenticationToken(
+            NodeId authenticationToken,
+            out uint channelId)
         {
-            return ProcessRequestAsyncResult.WaitForComplete(result, false);
+            return m_server.TryGetSecureChannelIdForAuthenticationToken(
+                authenticationToken,
+                out channelId);
         }
-        #endregion
 
-        #region IAuditEventCallback Members
         /// <inheritdoc/>
         public void ReportAuditOpenSecureChannelEvent(
             string globalChannelId,
@@ -137,27 +125,30 @@ namespace Opc.Ua
             Exception exception)
         {
             // trigger the reporting of AuditOpenSecureChannelEventType
-            ServerForContext?.ReportAuditOpenSecureChannelEvent(globalChannelId, endpointDescription, request, clientCertificate, exception);
+            ServerForContext?.ReportAuditOpenSecureChannelEvent(
+                globalChannelId,
+                endpointDescription,
+                request,
+                clientCertificate,
+                exception);
         }
 
         /// <inheritdoc/>
-        public void ReportAuditCloseSecureChannelEvent(
-            string globalChannelId,
-            Exception exception)
+        public void ReportAuditCloseSecureChannelEvent(string globalChannelId, Exception exception)
         {
             // trigger the reporting of close AuditChannelEventType
             ServerForContext?.ReportAuditCloseSecureChannelEvent(globalChannelId, exception);
         }
 
         /// <inheritdoc/>
-        public void ReportAuditCertificateEvent(X509Certificate2 clientCertificate, Exception exception)
+        public void ReportAuditCertificateEvent(
+            X509Certificate2 clientCertificate,
+            Exception exception)
         {
             // trigger the reporting of OpenSecureChannelAuditEvent
             ServerForContext?.ReportAuditCertificateEvent(clientCertificate, exception);
         }
-        #endregion
 
-        #region TracingContext Members
         /// <summary>
         /// Activity Source Name.
         /// </summary>
@@ -167,12 +158,16 @@ namespace Opc.Ua
         /// Activity Source static instance.
         /// </summary>
         public static ActivitySource ActivitySource => s_activitySource.Value;
-        private static readonly Lazy<ActivitySource> s_activitySource = new Lazy<ActivitySource>(() => new ActivitySource(ActivitySourceName, "1.0.0"));
+
+        private static readonly Lazy<ActivitySource> s_activitySource = new(() =>
+            new ActivitySource(ActivitySourceName, "1.0.0"));
 
         /// <summary>
         /// Tries to extract the trace details from the AdditionalParametersType.
         /// </summary>
-        public static bool TryExtractActivityContextFromParameters(AdditionalParametersType parameters, out ActivityContext activityContext)
+        public static bool TryExtractActivityContextFromParameters(
+            AdditionalParametersType parameters,
+            out ActivityContext activityContext)
         {
             if (parameters == null)
             {
@@ -180,29 +175,30 @@ namespace Opc.Ua
                 return false;
             }
 
-            ActivityTraceId traceId = default;
-            ActivitySpanId spanId = default;
-            ActivityTraceFlags traceFlags = ActivityTraceFlags.None;
-
-            foreach (var item in parameters.Parameters)
+            foreach (KeyValuePair item in parameters.Parameters)
             {
                 if (item.Key == "traceparent")
                 {
-                    var traceparent = item.Value.ToString();
-                    int firstDash = traceparent.IndexOf('-');
+                    string traceparent = item.Value.ToString();
+                    int firstDash = traceparent.IndexOf('-', StringComparison.Ordinal);
                     int secondDash = traceparent.IndexOf('-', firstDash + 1);
                     int thirdDash = traceparent.IndexOf('-', secondDash + 1);
 
                     if (firstDash != -1 && secondDash != -1)
                     {
-                        ReadOnlySpan<char> traceIdSpan = traceparent.AsSpan(firstDash + 1, secondDash - firstDash - 1);
-                        ReadOnlySpan<char> spanIdSpan = traceparent.AsSpan(secondDash + 1, thirdDash - secondDash - 1);
+                        ReadOnlySpan<char> traceIdSpan = traceparent.AsSpan(
+                            firstDash + 1,
+                            secondDash - firstDash - 1);
+                        ReadOnlySpan<char> spanIdSpan = traceparent.AsSpan(
+                            secondDash + 1,
+                            thirdDash - secondDash - 1);
                         ReadOnlySpan<char> traceFlagsSpan = traceparent.AsSpan(thirdDash + 1);
 
-                        traceId = ActivityTraceId.CreateFromString(traceIdSpan);
-                        spanId = ActivitySpanId.CreateFromString(spanIdSpan);
-                        traceFlags = traceFlagsSpan.SequenceEqual("01".AsSpan()) ? ActivityTraceFlags.Recorded : ActivityTraceFlags.None;
-
+                        var traceId = ActivityTraceId.CreateFromString(traceIdSpan);
+                        var spanId = ActivitySpanId.CreateFromString(spanIdSpan);
+                        ActivityTraceFlags traceFlags = traceFlagsSpan.SequenceEqual("01".AsSpan())
+                            ? ActivityTraceFlags.Recorded
+                            : ActivityTraceFlags.None;
                         activityContext = new ActivityContext(traceId, spanId, traceFlags);
                         return true;
                     }
@@ -215,25 +211,26 @@ namespace Opc.Ua
             activityContext = default;
             return false;
         }
-        #endregion
 
-        #region Public Methods
         /// <summary>
         /// Dispatches an incoming binary encoded request.
         /// </summary>
         /// <param name="incoming">Incoming request.</param>
+        /// <exception cref="ServiceResultException"></exception>
         public virtual IServiceResponse ProcessRequest(IServiceRequest incoming)
         {
             try
             {
                 SetRequestContext(RequestEncoding.Binary);
 
-                ServiceDefinition service = null;
-
                 // find service.
-                if (!SupportedServices.TryGetValue(incoming.TypeId, out service))
+                if (!SupportedServices.TryGetValue(incoming.TypeId, out ServiceDefinition service))
                 {
-                    throw new ServiceResultException(StatusCodes.BadServiceUnsupported, Utils.Format("'{0}' is an unrecognized service identifier.", incoming.TypeId));
+                    throw new ServiceResultException(
+                        StatusCodes.BadServiceUnsupported,
+                        Utils.Format(
+                            "'{0}' is an unrecognized service identifier.",
+                            incoming.TypeId));
                 }
 
                 // invoke service.
@@ -245,9 +242,38 @@ namespace Opc.Ua
                 return CreateFault(incoming, e);
             }
         }
-        #endregion
 
-        #region IEndpointBase Members
+        /// <summary>
+        /// Asynchronously dispatches an incoming binary encoded request.
+        /// </summary>
+        /// <param name="incoming">Incoming request.</param>
+        /// <param name="cancellationToken">Cancellation token.</param>
+        /// <exception cref="ServiceResultException"></exception>
+        public virtual async Task<IServiceResponse> ProcessRequestAsync(
+            IServiceRequest incoming,
+            CancellationToken cancellationToken = default)
+        {
+            try
+            {
+                SetRequestContext(RequestEncoding.Binary);
+
+                // find service.
+                if (!SupportedServices.TryGetValue(incoming.TypeId, out ServiceDefinition service))
+                {
+                    throw new ServiceResultException(StatusCodes.BadServiceUnsupported, Utils
+                        .Format("'{0}' is an unrecognized service identifier.", incoming.TypeId));
+                }
+
+                // invoke service.
+                return await service.InvokeAsync(incoming, cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception e)
+            {
+                // create fault.
+                return CreateFault(incoming, e);
+            }
+        }
+
 #if OPCUA_USE_SYNCHRONOUS_ENDPOINTS
         /// <summary>
         /// Dispatches an incoming binary encoded request.
@@ -255,27 +281,30 @@ namespace Opc.Ua
         /// <param name="request">Request.</param>
         /// <returns>Invoke service response message.</returns>
         public virtual InvokeServiceResponseMessage InvokeService(InvokeServiceMessage request)
-        {          
+        {
             IServiceRequest decodedRequest = null;
-            IServiceResponse  response = null;          
-            
+            IServiceResponse response = null;
+
             // create context for request and reply.
             ServiceMessageContext context = MessageContext;
-            
+
             try
             {
                 // check for null.
                 if (request == null || request.InvokeServiceRequest == null)
                 {
-                    throw new ServiceResultException(StatusCodes.BadDecodingError, Utils.Format("Null message cannot be processed."));
+                    throw new ServiceResultException(
+                        StatusCodes.BadDecodingError,
+                        Utils.Format("Null message cannot be processed."));
                 }
-                
+
                 // decoding incoming message.
-                decodedRequest = BinaryDecoder.DecodeMessage(request.InvokeServiceRequest, null, context) as IServiceRequest;
+                decodedRequest =
+                    BinaryDecoder.DecodeMessage(request.InvokeServiceRequest, null, context) as IServiceRequest;
 
                 // invoke service.
                 response = ProcessRequest(decodedRequest);
-                
+
                 // encode response.
                 InvokeServiceResponseMessage outgoing = new InvokeServiceResponseMessage();
                 outgoing.InvokeServiceResponse = BinaryEncoder.EncodeMessage(response, context);
@@ -285,7 +314,7 @@ namespace Opc.Ua
             {
                 // create fault.
                 ServiceFault fault = CreateFault(decodedRequest, e);
-                
+
                 // encode fault response.
                 if (context == null)
                 {
@@ -301,7 +330,10 @@ namespace Opc.Ua
         /// <summary>
         /// Dispatches an incoming binary encoded request.
         /// </summary>
-        public virtual IAsyncResult BeginInvokeService(InvokeServiceMessage request, AsyncCallback callback, object asyncState)
+        /// <exception cref="ServiceResultException"></exception>
+        public virtual async Task<InvokeServiceResponseMessage> InvokeServiceAsync(
+            InvokeServiceMessage request,
+            CancellationToken cancellationToken)
         {
             try
             {
@@ -314,41 +346,38 @@ namespace Opc.Ua
                 // set the request context.
                 SetRequestContext(RequestEncoding.Binary);
 
-                // create handler.
-                ProcessRequestAsyncResult result = new ProcessRequestAsyncResult(this, callback, asyncState, 0);
-                return result.BeginProcessRequest(SecureChannelContext.Current, request.InvokeServiceRequest);
-            }
-            catch (Exception e)
-            {
-                throw CreateSoapFault(null, e);
-            }
-        }
+                SecureChannelContext context = SecureChannelContext.Current;
 
-        /// <summary>
-        /// Dispatches an incoming binary encoded request.
-        /// </summary>
-        /// <param name="result">The async result.</param>
-        public virtual InvokeServiceResponseMessage EndInvokeService(IAsyncResult result)
-        {
-            try
-            {
-                // wait for the response.
-                IServiceResponse response = ProcessRequestAsyncResult.WaitForComplete(result, false);
+                // decoding incoming message.
+                var serviceRequest =
+                    BinaryDecoder.DecodeMessage(
+                        request.InvokeServiceRequest,
+                        null,
+                        MessageContext) as IServiceRequest;
+
+                // process the request.
+                IServiceResponse response = await ProcessRequestAsync(
+                    context.SecureChannelId,
+                    context.EndpointDescription,
+                    serviceRequest,
+                    cancellationToken).ConfigureAwait(false);
 
                 // encode the response.
-                InvokeServiceResponseMessage outgoing = new InvokeServiceResponseMessage();
-                outgoing.InvokeServiceResponse = BinaryEncoder.EncodeMessage(response, MessageContext);
-                return outgoing;
+                return new InvokeServiceResponseMessage
+                {
+                    InvokeServiceResponse = BinaryEncoder.EncodeMessage(response, MessageContext)
+                };
             }
             catch (Exception e)
             {
                 // create fault.
-                ServiceFault fault = CreateFault(ProcessRequestAsyncResult.GetRequest(result), e);
+                ServiceFault fault = CreateFault(null, e);
 
                 // encode the fault as a response.
-                InvokeServiceResponseMessage outgoing = new InvokeServiceResponseMessage();
-                outgoing.InvokeServiceResponse = BinaryEncoder.EncodeMessage(fault, MessageContext);
-                return outgoing;
+                return new InvokeServiceResponseMessage
+                {
+                    InvokeServiceResponse = BinaryEncoder.EncodeMessage(fault, MessageContext)
+                };
             }
         }
 #endif
@@ -357,61 +386,39 @@ namespace Opc.Ua
         /// Returns the host associated with the current context.
         /// </summary>
         /// <value>The host associated with the current context.</value>
-        protected IServiceHostBase HostForContext
-        {
-            get
-            {
-                if (m_host == null)
-                {
-                    m_host = GetHostForContext();
-                }
-
-                return m_host;
-            }
-        }
+        protected IServiceHostBase HostForContext => m_host ??= GetHostForContext();
 
         /// <summary>
         /// Returns the host associated with the current context.
         /// </summary>
         /// <returns>The host associated with the current context.</returns>
-        [System.Diagnostics.CodeAnalysis.SuppressMessage("Microsoft.Design", "CA1024:UsePropertiesWhereAppropriate")]
+        /// <exception cref="ServiceResultException"></exception>
         protected static IServiceHostBase GetHostForContext()
         {
-            throw new ServiceResultException(StatusCodes.BadInternalError, "The endpoint is not associated with a host that supports IServerHostBase.");
+            throw new ServiceResultException(
+                StatusCodes.BadInternalError,
+                "The endpoint is not associated with a host that supports IServerHostBase.");
         }
 
         /// <summary>
         /// Gets the server object from the operation context.
         /// </summary>
         /// <value>The server object from the operation context.</value>
-        [System.Diagnostics.CodeAnalysis.SuppressMessage("Microsoft.Naming", "CA1721:PropertyNamesShouldNotMatchGetMethods")]
-        protected IServerBase ServerForContext
-        {
-            get
-            {
-                if (m_server == null)
-                {
-                    m_server = GetServerForContext();
-                }
-
-                return m_server;
-            }
-        }
+        protected IServerBase ServerForContext => m_server ??= GetServerForContext();
 
         /// <summary>
         /// Gets the server object from the operation context.
         /// </summary>
         /// <returns>The server object from the operation context.</returns>
-        [System.Diagnostics.CodeAnalysis.SuppressMessage("Microsoft.Design", "CA1024:UsePropertiesWhereAppropriate")]
+        /// <exception cref="ServiceResultException"></exception>
         protected IServerBase GetServerForContext()
         {
             // get the server associated with the host.
-            IServerBase server = HostForContext.Server;
-
-            if (server == null)
-            {
-                throw new ServiceResultException(StatusCodes.BadInternalError, "The endpoint is not associated with a server instance.");
-            }
+            IServerBase server =
+                HostForContext.Server
+                ?? throw new ServiceResultException(
+                    StatusCodes.BadInternalError,
+                    "The endpoint is not associated with a server instance.");
 
             // check the server status.
             if (ServiceResult.IsBad(server.ServerError))
@@ -421,9 +428,7 @@ namespace Opc.Ua
 
             return server;
         }
-        #endregion
 
-        #region Protected Methods
         /// <summary>
         /// Find the endpoint description for the endpoint.
         /// </summary>
@@ -435,11 +440,10 @@ namespace Opc.Ua
         /// <summary>
         /// Finds the service identified by the request type.
         /// </summary>
+        /// <exception cref="ServiceResultException"></exception>
         protected ServiceDefinition FindService(ExpandedNodeId requestTypeId)
         {
-            ServiceDefinition service = null;
-
-            if (!SupportedServices.TryGetValue(requestTypeId, out service))
+            if (!SupportedServices.TryGetValue(requestTypeId, out ServiceDefinition service))
             {
                 throw ServiceResultException.Create(
                     StatusCodes.BadServiceUnsupported,
@@ -460,7 +464,7 @@ namespace Opc.Ua
         {
             DiagnosticsMasks diagnosticsMask = DiagnosticsMasks.ServiceNoInnerStatus;
 
-            ServiceFault fault = new ServiceFault();
+            var fault = new ServiceFault();
 
             if (request != null)
             {
@@ -473,9 +477,7 @@ namespace Opc.Ua
                 }
             }
 
-            ServiceResult result = null;
-
-
+            ServiceResult result;
             if (exception is ServiceResultException sre)
             {
                 result = new ServiceResult(sre);
@@ -488,12 +490,15 @@ namespace Opc.Ua
             else
             {
                 result = new ServiceResult(exception, StatusCodes.BadUnexpectedError);
-                Utils.LogError(exception, "SERVER - Unexpected Service Fault: {0}", exception.Message);
+                Utils.LogError(
+                    exception,
+                    "SERVER - Unexpected Service Fault: {0}",
+                    exception.Message);
             }
 
             fault.ResponseHeader.ServiceResult = result.Code;
 
-            StringTable stringTable = new StringTable();
+            var stringTable = new StringTable();
 
             fault.ResponseHeader.ServiceDiagnostics = new DiagnosticInfo(
                 result,
@@ -517,63 +522,42 @@ namespace Opc.Ua
             ServiceFault fault = CreateFault(request, exception);
 
             // get the error from the header.
-            ServiceResult error = fault.ResponseHeader.ServiceResult;
-
-            if (error == null)
-            {
-                error = ServiceResult.Create(StatusCodes.BadUnexpectedError, "An unknown error occurred.");
-            }
+            StatusCode error = fault.ResponseHeader.ServiceResult;
 
             // construct the fault code and fault reason.
             string codeName = StatusCodes.GetBrowseName(error.Code);
 
-            return new ServiceResultException((uint)error.StatusCode, codeName, exception);
+            return new ServiceResultException(error.Code, codeName, exception);
         }
 
         /// <summary>
         /// Returns the message context used by the server associated with the endpoint.
         /// </summary>
         /// <value>The message context.</value>
-        protected IServiceMessageContext MessageContext
-        {
-            get { return m_messageContext; }
-            set { m_messageContext = value; }
-        }
+        protected IServiceMessageContext MessageContext { get; set; }
 
         /// <summary>
         /// Returns the description for the endpoint
         /// </summary>
         /// <value>The endpoint description.</value>
-        protected EndpointDescription EndpointDescription
-        {
-            get { return m_endpointDescription; }
-            set { m_endpointDescription = value; }
-        }
+        protected EndpointDescription EndpointDescription { get; set; }
 
         /// <summary>
         /// Returns the error of the server.
         /// </summary>
         /// <value>The server error.</value>
-        protected ServiceResult ServerError
-        {
-            get { return m_serverError; }
-            set { m_serverError = value; }
-        }
+        protected ServiceResult ServerError { get; set; }
 
         /// <summary>
         /// The types of services known to the server.
         /// </summary>
-        protected Dictionary<ExpandedNodeId, ServiceDefinition> SupportedServices
-        {
-            get { return m_supportedServices; }
-            set { m_supportedServices = value; }
-        }
+        protected Dictionary<ExpandedNodeId, ServiceDefinition> SupportedServices { get; set; }
 
         /// <summary>
         /// Sets the request context for the thread.
         /// </summary>
         /// <param name="encoding">The encoding.</param>
-        protected void SetRequestContext(RequestEncoding encoding)
+        protected virtual void SetRequestContext(RequestEncoding encoding)
         {
         }
 
@@ -600,9 +584,7 @@ namespace Opc.Ua
         protected virtual void OnResponseFaultSent(Exception fault)
         {
         }
-        #endregion
 
-        #region ServiceDefinition Class
         /// <summary>
         /// Stores the definition of a service supported by the server.
         /// </summary>
@@ -613,66 +595,109 @@ namespace Opc.Ua
             /// </summary>
             /// <param name="requestType">Type of the request.</param>
             /// <param name="invokeMethod">The invoke method.</param>
+            public ServiceDefinition(Type requestType, InvokeServiceEventHandler invokeMethod)
+            {
+                RequestType = requestType;
+                m_invokeService = invokeMethod;
+            }
+
+            /// <summary>
+            /// Initializes the object with its request type and implementation.
+            /// </summary>
+            /// <param name="requestType">Type of the request.</param>
+            /// <param name="asyncInvokeMethod">The async invoke method.</param>
             public ServiceDefinition(
                 Type requestType,
-                InvokeServiceEventHandler invokeMethod)
+                InvokeServiceAsyncEventHandler asyncInvokeMethod)
             {
-                m_requestType = requestType;
-                m_InvokeService = invokeMethod;
+                RequestType = requestType;
+                m_invokeServiceAsync = asyncInvokeMethod;
+            }
+
+            /// <summary>
+            /// Initializes the object with its request type and implementation.
+            /// </summary>
+            /// <param name="requestType">Type of the request.</param>
+            /// <param name="invokeMethod">The invoke method.</param>
+            /// <param name="asyncInvokeMethod">The async invoke method.</param>
+            public ServiceDefinition(
+                Type requestType,
+                InvokeServiceEventHandler invokeMethod,
+                InvokeServiceAsyncEventHandler asyncInvokeMethod)
+            {
+                RequestType = requestType;
+                m_invokeService = invokeMethod;
+                m_invokeServiceAsync = asyncInvokeMethod;
             }
 
             /// <summary>
             /// The system type of the request object.
             /// </summary>
             /// <value>The type of the request.</value>
-            public Type RequestType
-            {
-                get { return m_requestType; }
-            }
+            public Type RequestType { get; }
 
             /// <summary>
             /// The system type of the request object.
             /// </summary>
             /// <value>The type of the response.</value>
-            public Type ResponseType
-            {
-                get { return m_requestType; }
-            }
+            public Type ResponseType => RequestType;
 
             /// <summary>
             /// Processes the request.
             /// </summary>
             /// <param name="request">The request.</param>
-            /// <returns></returns>
             public IServiceResponse Invoke(IServiceRequest request)
             {
-                if (m_InvokeService != null)
+                if (m_invokeService == null && m_invokeServiceAsync != null)
                 {
-                    return m_InvokeService(request);
+                    Utils.LogWarning(
+                        "Async Service invoced sychronously. Prefer using InvokeAsync for best performance.");
+                    return InvokeAsync(request).GetAwaiter().GetResult();
                 }
-
-                return null;
+                return m_invokeService?.Invoke(request);
             }
 
-            #region Private Fields
-            private Type m_requestType;
-            private InvokeServiceEventHandler m_InvokeService;
-            #endregion
+            /// <summary>
+            /// Processes the request asynchronously.
+            /// </summary>
+            /// <param name="request">The request.</param>
+            /// <param name="cancellationToken">The cancellation token.</param>
+            /// <returns></returns>
+            public async Task<IServiceResponse> InvokeAsync(
+                IServiceRequest request,
+                CancellationToken cancellationToken = default)
+            {
+                InvokeServiceAsyncEventHandler asyncHandler = m_invokeServiceAsync;
+
+                if (asyncHandler != null)
+                {
+                    return await asyncHandler(request, cancellationToken).ConfigureAwait(false);
+                }
+
+                return m_invokeService?.Invoke(request);
+            }
+
+            private readonly InvokeServiceEventHandler m_invokeService;
+            private readonly InvokeServiceAsyncEventHandler m_invokeServiceAsync;
         }
 
         /// <summary>
         /// A delegate used to dispatch incoming service requests.
         /// </summary>
         protected delegate IServiceResponse InvokeServiceEventHandler(IServiceRequest request);
-        #endregion
 
-        #region ProcessRequestAsyncResult Class
+        /// <summary>
+        /// A delegate used to asynchronously dispatch incoming service requests.
+        /// </summary>
+        protected delegate Task<IServiceResponse> InvokeServiceAsyncEventHandler(
+            IServiceRequest request,
+            CancellationToken cancellationToken = default);
+
         /// <summary>
         /// An AsyncResult object when handling an asynchronous request.
         /// </summary>
         protected class ProcessRequestAsyncResult : AsyncResultBase, IEndpointIncomingRequest
         {
-            #region Constructors
             /// <summary>
             /// Initializes a new instance of the <see cref="ProcessRequestAsyncResult"/> class.
             /// </summary>
@@ -685,41 +710,28 @@ namespace Opc.Ua
                 AsyncCallback callback,
                 object callbackData,
                 int timeout)
-            :
-                base(callback, callbackData, timeout)
+                : base(callback, callbackData, timeout)
             {
                 m_endpoint = endpoint;
             }
-            #endregion
 
-            #region IEndpointIncomingRequest Members
             /// <summary>
             /// Gets the request.
             /// </summary>
             /// <value>The request.</value>
-            public IServiceRequest Request
-            {
-                get { return m_request; }
-            }
+            public IServiceRequest Request { get; private set; }
 
             /// <summary>
             /// Gets the secure channel context associated with the request.
             /// </summary>
             /// <value>The secure channel context.</value>
-            public SecureChannelContext SecureChannelContext
-            {
-                get { return m_context; }
-            }
+            public SecureChannelContext SecureChannelContext { get; private set; }
 
             /// <summary>
             /// Gets or sets the call data associated with the request.
             /// </summary>
             /// <value>The call data.</value>
-            public object Calldata
-            {
-                get { return m_calldata; }
-                set { m_calldata = value; }
-            }
+            public object Calldata { get; set; }
 
             /// <summary>
             /// Used to call the default synchronous handler.
@@ -735,10 +747,23 @@ namespace Opc.Ua
             }
 
             /// <summary>
+            /// Used to call the default asynchronous handler.
+            /// </summary>
+            /// <remarks>
+            /// This method may block the current thread so the caller must not call in the
+            /// thread that calls IServerBase.ScheduleIncomingRequest().
+            /// This method always traps any exceptions and reports them to the client as a fault.
+            /// </remarks>
+            public async Task CallAsync(CancellationToken cancellationToken = default)
+            {
+                await OnProcessRequestAsync(null, cancellationToken).ConfigureAwait(false);
+            }
+
+            /// <summary>
             /// Used to indicate that the asynchronous operation has completed.
             /// </summary>
             /// <param name="response">The response. May be null if an error is provided.</param>
-            /// <param name="error"></param>
+            /// <param name="error">Error result</param>
             public void OperationCompleted(IServiceResponse response, ServiceResult error)
             {
                 // save response and/or error.
@@ -754,9 +779,7 @@ namespace Opc.Ua
                 // operation completed.
                 OperationCompleted();
             }
-            #endregion
 
-            #region Public Members
             /// <summary>
             /// Begins processing an incoming request.
             /// </summary>
@@ -765,23 +788,31 @@ namespace Opc.Ua
             /// <returns>
             /// The result object that is used to call the EndProcessRequest method.
             /// </returns>
+            /// <exception cref="ServiceResultException"></exception>
             public IAsyncResult BeginProcessRequest(
                 SecureChannelContext context,
                 byte[] requestData)
             {
-                m_context = context;
+                SecureChannelContext = context;
 
                 try
                 {
                     // decoding incoming message.
-                    m_request = BinaryDecoder.DecodeMessage(requestData, null, m_endpoint.MessageContext) as IServiceRequest;
+                    Request =
+                        BinaryDecoder.DecodeMessage(
+                            requestData,
+                            null,
+                            m_endpoint.MessageContext) as IServiceRequest;
 
                     // find service.
-                    m_service = m_endpoint.FindService(m_request.TypeId);
+                    m_service = m_endpoint.FindService(Request.TypeId);
 
                     if (m_service == null)
                     {
-                        throw ServiceResultException.Create(StatusCodes.BadServiceUnsupported, "'{0}' is an unrecognized service type.", m_request.TypeId);
+                        throw ServiceResultException.Create(
+                            StatusCodes.BadServiceUnsupported,
+                            "'{0}' is an unrecognized service type.",
+                            Request.TypeId);
                     }
 
                     // queue request.
@@ -805,21 +836,25 @@ namespace Opc.Ua
             /// <param name="context">The security context for the request</param>
             /// <param name="request">The request.</param>
             /// <returns>The result object that is used to call the EndProcessRequest method.</returns>
+            /// <exception cref="ServiceResultException"></exception>
             public IAsyncResult BeginProcessRequest(
                 SecureChannelContext context,
                 IServiceRequest request)
             {
-                m_context = context;
-                m_request = request;
+                SecureChannelContext = context;
+                Request = request;
 
                 try
                 {
                     // find service.
-                    m_service = m_endpoint.FindService(m_request.TypeId);
+                    m_service = m_endpoint.FindService(Request.TypeId);
 
                     if (m_service == null)
                     {
-                        throw ServiceResultException.Create(StatusCodes.BadServiceUnsupported, "'{0}' is an unrecognized service type.", m_request.TypeId);
+                        throw ServiceResultException.Create(
+                            StatusCodes.BadServiceUnsupported,
+                            "'{0}' is an unrecognized service type.",
+                            Request.TypeId);
                     }
 
                     // queue request.
@@ -843,19 +878,21 @@ namespace Opc.Ua
             /// <param name="ar">The IAsyncResult object for the operation.</param>
             /// <param name="throwOnError">if set to <c>true</c> an exception is thrown if an error occurred.</param>
             /// <returns>The response.</returns>
+            /// <exception cref="ArgumentException"></exception>
+            /// <exception cref="TimeoutException"></exception>
+            /// <exception cref="ServiceResultException"></exception>
             public static IServiceResponse WaitForComplete(IAsyncResult ar, bool throwOnError)
             {
-                if (!(ar is ProcessRequestAsyncResult result))
+                if (ar is not ProcessRequestAsyncResult result)
                 {
-                    throw new ArgumentException("End called with an invalid IAsyncResult object.", nameof(ar));
+                    throw new ArgumentException(
+                        "End called with an invalid IAsyncResult object.",
+                        nameof(ar));
                 }
 
-                if (result.m_response == null)
+                if (result.m_response == null && !result.WaitForComplete())
                 {
-                    if (!result.WaitForComplete())
-                    {
-                        throw new TimeoutException();
-                    }
+                    throw new TimeoutException();
                 }
 
                 if (throwOnError && result.m_error != null)
@@ -875,14 +912,12 @@ namespace Opc.Ua
             {
                 if (ar is ProcessRequestAsyncResult result)
                 {
-                    return result.m_request;
+                    return result.Request;
                 }
 
                 return null;
             }
-            #endregion
 
-            #region Private Members
             /// <summary>
             /// Saves an exception as response.
             /// </summary>
@@ -891,11 +926,11 @@ namespace Opc.Ua
             {
                 try
                 {
-                    return EndpointBase.CreateFault(m_request, e);
+                    return CreateFault(Request, e);
                 }
                 catch (Exception e2)
                 {
-                    return EndpointBase.CreateFault(null, e2);
+                    return CreateFault(null, e2);
                 }
             }
 
@@ -907,30 +942,34 @@ namespace Opc.Ua
                 try
                 {
                     // set the context.
-                    SecureChannelContext.Current = m_context;
+                    SecureChannelContext.Current = SecureChannelContext;
 
                     if (ActivitySource.HasListeners())
                     {
                         // extract trace information from the request header if available
-                        if (m_request.RequestHeader?.AdditionalHeader?.Body is AdditionalParametersType parameters &&
-                            TryExtractActivityContextFromParameters(parameters, out var activityContext))
+                        if (Request.RequestHeader?.AdditionalHeader?
+                                .Body is AdditionalParametersType parameters &&
+                            TryExtractActivityContextFromParameters(
+                                parameters,
+                                out ActivityContext activityContext))
                         {
-                            using (var activity = ActivitySource.StartActivity(m_request.GetType().Name, ActivityKind.Server, activityContext))
-                            {
-                                // call the service.
-                                m_response = m_service.Invoke(m_request);
-                            }
+                            using Activity activity = ActivitySource.StartActivity(
+                                Request.GetType().Name,
+                                ActivityKind.Server,
+                                activityContext);
+                            // call the service.
+                            m_response = m_service.Invoke(Request);
                         }
                         else
                         {
                             // call the service even when there is no trace information
-                            m_response = m_service.Invoke(m_request);
+                            m_response = m_service.Invoke(Request);
                         }
                     }
                     else
                     {
                         // no listener, directly call the service.
-                        m_response = m_service.Invoke(m_request);
+                        m_response = m_service.Invoke(Request);
                     }
                 }
                 catch (Exception e)
@@ -943,28 +982,186 @@ namespace Opc.Ua
                 // report completion.
                 OperationCompleted();
             }
-            #endregion     
 
-            #region Private Fields
-            private EndpointBase m_endpoint;
-            private SecureChannelContext m_context;
-            private IServiceRequest m_request;
+            /// <summary>
+            /// Processes the request asynchronously.
+            /// </summary>
+            private async Task OnProcessRequestAsync(
+                object state,
+                CancellationToken cancellationToken = default)
+            {
+                try
+                {
+                    // set the context.
+                    SecureChannelContext.Current = SecureChannelContext;
+
+                    if (ActivitySource.HasListeners())
+                    {
+                        // extract trace information from the request header if available
+                        if (Request.RequestHeader?.AdditionalHeader?
+                            .Body is AdditionalParametersType parameters &&
+                            TryExtractActivityContextFromParameters(
+                                parameters,
+                                out ActivityContext activityContext))
+                        {
+                            using Activity activity = ActivitySource.StartActivity(
+                                Request.GetType().Name,
+                                ActivityKind.Server,
+                                activityContext);
+                            // call the service.
+                            m_response = await m_service.InvokeAsync(Request, cancellationToken)
+                                .ConfigureAwait(false);
+                        }
+                        else
+                        {
+                            // call the service even when there is no trace information
+                            m_response = await m_service.InvokeAsync(Request, cancellationToken)
+                                .ConfigureAwait(false);
+                        }
+                    }
+                    else
+                    {
+                        // no listener, directly call the service.
+                        m_response = await m_service.InvokeAsync(Request, cancellationToken)
+                            .ConfigureAwait(false);
+                    }
+                }
+                catch (Exception e)
+                {
+                    // save any error.
+                    m_error = e;
+                    m_response = SaveExceptionAsResponse(e);
+                }
+
+                // report completion.
+                OperationCompleted();
+            }
+
+            private readonly EndpointBase m_endpoint;
             private IServiceResponse m_response;
             private ServiceDefinition m_service;
             private Exception m_error;
-            private object m_calldata;
-            #endregion
         }
-        #endregion
 
-        #region Private Fields
-        private ServiceResult m_serverError;
-        private IServiceMessageContext m_messageContext;
-        private EndpointDescription m_endpointDescription;
-        private Dictionary<ExpandedNodeId, ServiceDefinition> m_supportedServices;
+        /// <summary>
+        /// An object that handles an incoming request for an endpoint.
+        /// </summary>
+        protected class EndpointIncomingRequest : IEndpointIncomingRequest
+        {
+            /// <summary>
+            /// Initialize the Object with a Request
+            /// </summary>
+            public EndpointIncomingRequest(
+                EndpointBase endpoint,
+                SecureChannelContext context,
+                IServiceRequest request)
+            {
+                m_endpoint = endpoint;
+                SecureChannelContext = context;
+                Request = request;
+                m_tcs = new TaskCompletionSource<IServiceResponse>();
+            }
+
+            /// <inheritdoc/>
+            public object Calldata { get; set; }
+
+            /// <inheritdoc/>
+            public SecureChannelContext SecureChannelContext { get; }
+
+            /// <inheritdoc/>
+            public IServiceRequest Request { get; }
+
+            /// <summary>
+            /// Process an incoming request
+            /// </summary>
+            /// <returns></returns>
+            public Task<IServiceResponse> ProcessAsync(CancellationToken cancellationToken = default)
+            {
+                try
+                {
+                    m_cancellationToken = cancellationToken;
+                    m_cancellationToken.Register(() => m_tcs.TrySetCanceled());
+                    m_service = m_endpoint.FindService(Request.TypeId);
+                    m_endpoint.ServerForContext.ScheduleIncomingRequest(this, m_cancellationToken);
+                }
+                catch (Exception e)
+                {
+                    m_tcs.TrySetResult(CreateFault(Request, e));
+                }
+
+                return m_tcs.Task;
+            }
+
+            /// <inheritdoc/>
+            public async Task CallAsync(CancellationToken cancellationToken = default)
+            {
+                using CancellationTokenSource timeoutHintCts = (int)Request.RequestHeader.TimeoutHint > 0 ?
+                    new CancellationTokenSource((int)Request.RequestHeader.TimeoutHint) : null;
+
+                CancellationToken[] tokens = timeoutHintCts != null ?
+                    [m_cancellationToken, cancellationToken, timeoutHintCts.Token] :
+                    [m_cancellationToken, cancellationToken];
+
+                using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(tokens);
+
+                try
+                {
+                    SecureChannelContext.Current = SecureChannelContext;
+
+                    Activity activity = null;
+                    if (ActivitySource.HasListeners())
+                    {
+                        // extract trace information from the request header if available
+                        if (Request.RequestHeader?.AdditionalHeader?
+                            .Body is AdditionalParametersType parameters &&
+                            TryExtractActivityContextFromParameters(
+                                parameters,
+                                out ActivityContext activityContext))
+                        {
+                            activity = ActivitySource.StartActivity(
+                                Request.GetType().Name,
+                                ActivityKind.Server,
+                                activityContext);
+                        }
+                    }
+
+                    using (activity)
+                    {
+                        IServiceResponse response = await m_service.InvokeAsync(Request, linkedCts.Token).ConfigureAwait(false);
+                        m_tcs.TrySetResult(response);
+                    }
+                }
+                catch (Exception e)
+                {
+                    if (e is OperationCanceledException)
+                    {
+                        e = new ServiceResultException(StatusCodes.BadTimeout);
+                    }
+
+                    m_tcs.TrySetResult(CreateFault(Request, e));
+                }
+            }
+
+            /// <inheritdoc/>
+            public void OperationCompleted(IServiceResponse response, ServiceResult error)
+            {
+                if (ServiceResult.IsBad(error))
+                {
+                    m_tcs.TrySetResult(CreateFault(Request, new ServiceResultException(error)));
+                }
+                else
+                {
+                    m_tcs.TrySetResult(response);
+                }
+            }
+
+            private readonly EndpointBase m_endpoint;
+            private CancellationToken m_cancellationToken;
+            private ServiceDefinition m_service;
+            private readonly TaskCompletionSource<IServiceResponse> m_tcs;
+        }
+
         private IServiceHostBase m_host;
         private IServerBase m_server;
-        private string g_ImplementationString = "Opc.Ua.EndpointBase UA Service " + Utils.GetAssemblySoftwareVersion();
-        #endregion
     }
 }

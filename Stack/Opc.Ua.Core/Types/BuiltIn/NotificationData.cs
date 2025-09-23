@@ -29,7 +29,7 @@ namespace Opc.Ua
         public uint SequenceNumber { get; set; }
 
         /// <summary>
-        /// Helper variable for a client to pass the publish time 
+        /// Helper variable for a client to pass the publish time
         /// of the publish response for the data and the event change notification
         /// to a client application which subscribes to subscription notifications.
         /// </summary>
@@ -37,5 +37,11 @@ namespace Opc.Ua
         /// A value of MinTime indicates that the time is not known.
         /// </remarks>
         public DateTime PublishTime { get; set; }
+
+        /// <summary>
+        /// Helper variable for a client to pass the information that more
+        /// notifications are expected for this publish interval.
+        /// </summary>
+        public bool MoreNotifications { get; set; }
     }
 }

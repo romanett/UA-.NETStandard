@@ -1,10 +1,8 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
-
   <PropertyGroup>
-    <DefineConstants>$(DefineConstants);CLIENT_ASYNC</DefineConstants>
-    <AssemblyName>Opc.Ua.Client</AssemblyName>
+    <AssemblyName>$(AssemblyPrefix).Client</AssemblyName>
     <TargetFrameworks>$(LibTargetFrameworks)</TargetFrameworks>
-    <PackageId>OPCFoundation.NetStandard.Opc.Ua.Client</PackageId>
+    <PackageId>$(PackagePrefix).Opc.Ua.Client</PackageId>
     <RootNamespace>Opc.Ua.Client</RootNamespace>
     <Description>OPC UA Client Class Library</Description>
     <IsPackable>true</IsPackable>
@@ -12,43 +10,27 @@
     <PackageLicenseFile></PackageLicenseFile>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
   </PropertyGroup>
-
   <PropertyGroup Condition="'$(SignAssembly)' == 'true'">
     <DefineConstants>$(DefineConstants);SIGNASSEMBLY</DefineConstants>
   </PropertyGroup>
-
   <PropertyGroup Condition="'$(Configuration)' == 'Debug'">
     <PackageId>$(PackageId).Debug</PackageId>
   </PropertyGroup>
-
-  <!-- Needed on windows builds since 'netstandard2.0' Opc.Ua.Client.dll builds
-       are reporting "error : API compatibility errors" with 'net472' and 'netstandard2.1' targets -->
-  <PropertyGroup>
-    <ApiCompatGenerateSuppressionFile>true</ApiCompatGenerateSuppressionFile>
-  </PropertyGroup>
-
   <!-- select ECC support -->
   <Choose>
-    <When Condition="'$(TargetFramework)' == 'net462' OR '$(TargetFramework)' == 'netstandard2.0'">
-      <ItemGroup>
-        <PackageReference Include="System.Diagnostics.DiagnosticSource" Version="6.0.1" />
-      </ItemGroup>
-    </When>
+    <When Condition="'$(TargetFramework)' == 'net462' OR '$(TargetFramework)' == 'netstandard2.0'"></When>
     <Otherwise>
       <PropertyGroup>
         <DefineConstants>$(DefineConstants);ECC_SUPPORT</DefineConstants>
       </PropertyGroup>
-      <ItemGroup Condition="'$(TargetFramework)' == 'netstandard2.1' OR '$(TargetFramework)' == 'net472' OR '$(TargetFramework)' == 'net48'">
-        <PackageReference Include="System.Diagnostics.DiagnosticSource" Version="6.0.1" />
-      </ItemGroup>
     </Otherwise>
   </Choose>
-
+  <ItemGroup>
+    <PackageReference Include="BitFaster.Caching" />
+  </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\Stack\Opc.Ua.Core\Opc.Ua.Core.csproj" />
     <ProjectReference Include="..\Opc.Ua.Configuration\Opc.Ua.Configuration.csproj" />
   </ItemGroup>
-
   <Target Name="GetPackagingOutputs" />
-
 </Project>

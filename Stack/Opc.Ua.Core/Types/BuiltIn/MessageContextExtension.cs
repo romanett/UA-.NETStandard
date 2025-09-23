@@ -10,9 +10,11 @@
    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
 */
 
+using System;
+using System.Threading;
+
 namespace Opc.Ua
 {
-    #region MessageContextExtension Class
     /// <summary>
     /// Uses to add the service message context to the operation context.
     /// </summary>
@@ -29,7 +31,11 @@ namespace Opc.Ua
         /// <summary>
         /// Returns the message context associated with the current operation context.
         /// </summary>
-        public static MessageContextExtension Current => null;
+        public static MessageContextExtension Current
+        {
+            get => s_current.Value;
+            private set => s_current.Value = value;
+        }
 
         /// <summary>
         /// Returns the message context associated with the current operation context.
@@ -38,7 +44,7 @@ namespace Opc.Ua
         {
             get
             {
-                MessageContextExtension extension = MessageContextExtension.Current;
+                MessageContextExtension extension = Current;
 
                 if (extension != null)
                 {
@@ -52,7 +58,38 @@ namespace Opc.Ua
         /// <summary>
         /// The message context to use.
         /// </summary>
-        public IServiceMessageContext MessageContext { get; private set; }
+        public IServiceMessageContext MessageContext { get; }
+
+        /// <summary>
+        /// Set the context for a specific using scope
+        /// </summary>
+        public static IDisposable SetScopedContext(IServiceMessageContext messageContext)
+        {
+            MessageContextExtension previousContext = Current;
+            Current = new MessageContextExtension(messageContext);
+
+            return new DisposableAction(() => Current = previousContext);
+        }
+
+        /// <summary>
+        /// Disposable wrapper for reseting the Current context to
+        /// the previous value on exiting the using scope
+        /// </summary>
+        private class DisposableAction : IDisposable
+        {
+            private readonly Action m_action;
+
+            public DisposableAction(Action action)
+            {
+                m_action = action;
+            }
+
+            public void Dispose()
+            {
+                m_action?.Invoke();
+            }
+        }
+
+        private static readonly AsyncLocal<MessageContextExtension> s_current = new();
     }
-    #endregion
 }

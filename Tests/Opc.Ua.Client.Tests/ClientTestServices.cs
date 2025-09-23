@@ -2,7 +2,7 @@
  * Copyright (c) 2005-2020 The OPC Foundation, Inc. All rights reserved.
  *
  * OPC Foundation MIT License 1.00
- * 
+ *
  * Permission is hereby granted, free of charge, to any person
  * obtaining a copy of this software and associated documentation
  * files (the "Software"), to deal in the Software without
@@ -11,7 +11,7 @@
  * copies of the Software, and to permit persons to whom the
  * Software is furnished to do so, subject to the following
  * conditions:
- * 
+ *
  * The above copyright notice and this permission notice shall be
  * included in all copies or substantial portions of the Software.
  * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
@@ -36,7 +36,7 @@ namespace Opc.Ua.Client.Tests
     /// </summary>
     public class ClientTestServices : IServerTestServices
     {
-        private ISession m_session;
+        private readonly ISession m_session;
 
         public ClientTestServices(ISession session)
         {
@@ -51,9 +51,15 @@ namespace Opc.Ua.Client.Tests
             out BrowseResultCollection results,
             out DiagnosticInfoCollection diagnosticInfos)
         {
-            return m_session.Browse(requestHeader, view,
-                requestedMaxReferencesPerNode, nodesToBrowse,
-                out results, out diagnosticInfos);
+            BrowseResponse response = m_session.BrowseAsync(
+                requestHeader,
+                view,
+                requestedMaxReferencesPerNode,
+                nodesToBrowse,
+                default).GetAwaiter().GetResult();
+            results = response.Results;
+            diagnosticInfos = response.DiagnosticInfos;
+            return response.ResponseHeader;
         }
 
         public ResponseHeader BrowseNext(
@@ -63,9 +69,14 @@ namespace Opc.Ua.Client.Tests
             out BrowseResultCollection results,
             out DiagnosticInfoCollection diagnosticInfos)
         {
-            return m_session.BrowseNext(requestHeader,
-                releaseContinuationPoints, continuationPoints,
-                out results, out diagnosticInfos);
+            BrowseNextResponse response = m_session.BrowseNextAsync(
+                requestHeader,
+                releaseContinuationPoints,
+                continuationPoints,
+                default).GetAwaiter().GetResult();
+            results = response.Results;
+            diagnosticInfos = response.DiagnosticInfos;
+            return response.ResponseHeader;
         }
 
         public ResponseHeader CreateSubscription(
@@ -81,9 +92,20 @@ namespace Opc.Ua.Client.Tests
             out uint revisedLifetimeCount,
             out uint revisedMaxKeepAliveCount)
         {
-            return m_session.CreateSubscription(requestHeader, requestedPublishingInterval, requestedLifetimeCount, requestedMaxKeepAliveCount,
-                maxNotificationsPerPublish, publishingEnabled, priority,
-                out subscriptionId, out revisedPublishingInterval, out revisedLifetimeCount, out revisedMaxKeepAliveCount);
+            CreateSubscriptionResponse response = m_session.CreateSubscriptionAsync(
+                requestHeader,
+                requestedPublishingInterval,
+                requestedLifetimeCount,
+                requestedMaxKeepAliveCount,
+                maxNotificationsPerPublish,
+                publishingEnabled,
+                priority,
+                default).GetAwaiter().GetResult();
+            subscriptionId = response.SubscriptionId;
+            revisedPublishingInterval = response.RevisedPublishingInterval;
+            revisedLifetimeCount = response.RevisedLifetimeCount;
+            revisedMaxKeepAliveCount = response.RevisedMaxKeepAliveCount;
+            return response.ResponseHeader;
         }
 
         public ResponseHeader CreateMonitoredItems(
@@ -94,8 +116,15 @@ namespace Opc.Ua.Client.Tests
             out MonitoredItemCreateResultCollection results,
             out DiagnosticInfoCollection diagnosticInfos)
         {
-            return m_session.CreateMonitoredItems(requestHeader, subscriptionId, timestampsToReturn, itemsToCreate,
-                out results, out diagnosticInfos);
+            CreateMonitoredItemsResponse response = m_session.CreateMonitoredItemsAsync(
+                requestHeader,
+                subscriptionId,
+                timestampsToReturn,
+                itemsToCreate,
+                default).GetAwaiter().GetResult();
+            results = response.Results;
+            diagnosticInfos = response.DiagnosticInfos;
+            return response.ResponseHeader;
         }
 
         public ResponseHeader ModifySubscription(
@@ -110,9 +139,19 @@ namespace Opc.Ua.Client.Tests
             out uint revisedLifetimeCount,
             out uint revisedMaxKeepAliveCount)
         {
-            return m_session.ModifySubscription(requestHeader, subscriptionId, requestedPublishingInterval,
-                requestedLifetimeCount, requestedMaxKeepAliveCount, maxNotificationsPerPublish,
-                priority, out revisedPublishingInterval, out revisedLifetimeCount, out revisedMaxKeepAliveCount);
+            ModifySubscriptionResponse response = m_session.ModifySubscriptionAsync(
+                requestHeader,
+                subscriptionId,
+                requestedPublishingInterval,
+                requestedLifetimeCount,
+                requestedMaxKeepAliveCount,
+                maxNotificationsPerPublish,
+                priority,
+                default).GetAwaiter().GetResult();
+            revisedPublishingInterval = response.RevisedPublishingInterval;
+            revisedLifetimeCount = response.RevisedLifetimeCount;
+            revisedMaxKeepAliveCount = response.RevisedMaxKeepAliveCount;
+            return response.ResponseHeader;
         }
 
         public ResponseHeader ModifyMonitoredItems(
@@ -123,7 +162,15 @@ namespace Opc.Ua.Client.Tests
             out MonitoredItemModifyResultCollection results,
             out DiagnosticInfoCollection diagnosticInfos)
         {
-            return m_session.ModifyMonitoredItems(requestHeader, subscriptionId, timestampsToReturn, itemsToModify, out results, out diagnosticInfos);
+            ModifyMonitoredItemsResponse response = m_session.ModifyMonitoredItemsAsync(
+                requestHeader,
+                subscriptionId,
+                timestampsToReturn,
+                itemsToModify,
+                default).GetAwaiter().GetResult();
+            results = response.Results;
+            diagnosticInfos = response.DiagnosticInfos;
+            return response.ResponseHeader;
         }
 
         public ResponseHeader Publish(
@@ -136,8 +183,17 @@ namespace Opc.Ua.Client.Tests
             out StatusCodeCollection results,
             out DiagnosticInfoCollection diagnosticInfos)
         {
-            return m_session.Publish(requestHeader, subscriptionAcknowledgements, out subscriptionId, out availableSequenceNumbers,
-                out moreNotifications, out notificationMessage, out results, out diagnosticInfos);
+            PublishResponse response = m_session.PublishAsync(
+                requestHeader,
+                subscriptionAcknowledgements,
+                default).GetAwaiter().GetResult();
+            subscriptionId = response.SubscriptionId;
+            availableSequenceNumbers = response.AvailableSequenceNumbers;
+            moreNotifications = response.MoreNotifications;
+            notificationMessage = response.NotificationMessage;
+            results = response.Results;
+            diagnosticInfos = response.DiagnosticInfos;
+            return response.ResponseHeader;
         }
 
         public ResponseHeader SetPublishingMode(
@@ -147,7 +203,33 @@ namespace Opc.Ua.Client.Tests
             out StatusCodeCollection results,
             out DiagnosticInfoCollection diagnosticInfos)
         {
-            return m_session.SetPublishingMode(requestHeader, publishingEnabled, subscriptionIds, out results, out diagnosticInfos);
+            SetPublishingModeResponse response = m_session.SetPublishingModeAsync(
+                requestHeader,
+                publishingEnabled,
+                subscriptionIds,
+                default).GetAwaiter().GetResult();
+            results = response.Results;
+            diagnosticInfos = response.DiagnosticInfos;
+            return response.ResponseHeader;
+        }
+
+        public ResponseHeader SetMonitoringMode(
+            RequestHeader requestHeader,
+            uint subscriptionId,
+            MonitoringMode monitoringMode,
+            UInt32Collection monitoredItemIds,
+            out StatusCodeCollection results,
+            out DiagnosticInfoCollection diagnosticInfos)
+        {
+            SetMonitoringModeResponse response = m_session.SetMonitoringModeAsync(
+                requestHeader,
+                subscriptionId,
+                monitoringMode,
+                monitoredItemIds,
+                default).GetAwaiter().GetResult();
+            results = response.Results;
+            diagnosticInfos = response.DiagnosticInfos;
+            return response.ResponseHeader;
         }
 
         public ResponseHeader Republish(
@@ -156,7 +238,13 @@ namespace Opc.Ua.Client.Tests
             uint retransmitSequenceNumber,
             out NotificationMessage notificationMessage)
         {
-            return m_session.Republish(requestHeader, subscriptionId, retransmitSequenceNumber, out notificationMessage);
+            RepublishResponse response = m_session.RepublishAsync(
+                requestHeader,
+                subscriptionId,
+                retransmitSequenceNumber,
+                default).GetAwaiter().GetResult();
+            notificationMessage = response.NotificationMessage;
+            return response.ResponseHeader;
         }
 
         public ResponseHeader DeleteSubscriptions(
@@ -165,7 +253,13 @@ namespace Opc.Ua.Client.Tests
             out StatusCodeCollection results,
             out DiagnosticInfoCollection diagnosticInfos)
         {
-            return m_session.DeleteSubscriptions(requestHeader, subscriptionIds, out results, out diagnosticInfos);
+            DeleteSubscriptionsResponse response = m_session.DeleteSubscriptionsAsync(
+                requestHeader,
+                subscriptionIds,
+                default).GetAwaiter().GetResult();
+            results = response.Results;
+            diagnosticInfos = response.DiagnosticInfos;
+            return response.ResponseHeader;
         }
 
         public ResponseHeader TransferSubscriptions(
@@ -175,7 +269,14 @@ namespace Opc.Ua.Client.Tests
             out TransferResultCollection results,
             out DiagnosticInfoCollection diagnosticInfos)
         {
-            return m_session.TransferSubscriptions(requestHeader, subscriptionIds, sendInitialValues, out results, out diagnosticInfos);
+            TransferSubscriptionsResponse response = m_session.TransferSubscriptionsAsync(
+                requestHeader,
+                subscriptionIds,
+                sendInitialValues,
+                default).GetAwaiter().GetResult();
+            results = response.Results;
+            diagnosticInfos = response.DiagnosticInfos;
+            return response.ResponseHeader;
         }
 
         public ResponseHeader TranslateBrowsePathsToNodeIds(
@@ -184,9 +285,14 @@ namespace Opc.Ua.Client.Tests
             out BrowsePathResultCollection results,
             out DiagnosticInfoCollection diagnosticInfos)
         {
-            return m_session.TranslateBrowsePathsToNodeIds(requestHeader,
-                browsePaths,
-                out results, out diagnosticInfos);
+            TranslateBrowsePathsToNodeIdsResponse response =
+                m_session.TranslateBrowsePathsToNodeIdsAsync(
+                    requestHeader,
+                    browsePaths,
+                    default).GetAwaiter().GetResult();
+            results = response.Results;
+            diagnosticInfos = response.DiagnosticInfos;
+            return response.ResponseHeader;
         }
     }
 }

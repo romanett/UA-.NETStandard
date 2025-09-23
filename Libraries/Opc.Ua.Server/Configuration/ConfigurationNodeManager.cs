@@ -2,7 +2,7 @@
  * Copyright (c) 2005-2020 The OPC Foundation, Inc. All rights reserved.
  *
  * OPC Foundation MIT License 1.00
- * 
+ *
  * Permission is hereby granted, free of charge, to any person
  * obtaining a copy of this software and associated documentation
  * files (the "Software"), to deal in the Software without
@@ -11,7 +11,7 @@
  * copies of the Software, and to permit persons to whom the
  * Software is furnished to do so, subject to the following
  * conditions:
- * 
+ *
  * The above copyright notice and this permission notice shall be
  * included in all copies or substantial portions of the Software.
  * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
@@ -31,12 +31,15 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Security.Cryptography.X509Certificates;
+using System.Threading;
 using System.Threading.Tasks;
-
+using Opc.Ua.Security.Certificates;
+#if ECC_SUPPORT
+using System.Security.Cryptography;
+#endif
 
 namespace Opc.Ua.Server
 {
-
     /// <summary>
     /// Privileged identity which can access the system configuration.
     /// </summary>
@@ -48,7 +51,7 @@ namespace Opc.Ua.Server
         /// </summary>
         /// <param name="identity">The user identity.</param>
         public SystemConfigurationIdentity(IUserIdentity identity)
-        : base(identity, new List<Role> { Role.SecurityAdmin, Role.ConfigureAdmin })
+            : base(identity, [Role.SecurityAdmin, Role.ConfigureAdmin])
         {
         }
     }
@@ -56,49 +59,102 @@ namespace Opc.Ua.Server
     /// <summary>
     /// The Server Configuration Node Manager.
     /// </summary>
-    public class ConfigurationNodeManager : DiagnosticsNodeManager
+    public class ConfigurationNodeManager : DiagnosticsNodeManager, ICallAsyncNodeManager
     {
-        #region Constructors
         /// <summary>
         /// Initializes the configuration and diagnostics manager.
         /// </summary>
         public ConfigurationNodeManager(
             IServerInternal server,
-            ApplicationConfiguration configuration
-            )
-            :
-            base(server, configuration)
+            ApplicationConfiguration configuration)
+            : base(server, configuration)
         {
-            string rejectedStorePath = configuration.SecurityConfiguration.RejectedCertificateStore?.StorePath;
+            string rejectedStorePath = configuration.SecurityConfiguration.RejectedCertificateStore?
+                .StorePath;
             if (!string.IsNullOrEmpty(rejectedStorePath))
             {
                 m_rejectedStore = new CertificateStoreIdentifier(rejectedStorePath);
             }
-            m_certificateGroups = new List<ServerCertificateGroup>();
+            m_certificateGroups = [];
             m_configuration = configuration;
             // TODO: configure cert groups in configuration
-            ServerCertificateGroup defaultApplicationGroup = new ServerCertificateGroup {
-                NodeId = Opc.Ua.ObjectIds.ServerConfiguration_CertificateGroups_DefaultApplicationGroup,
-                BrowseName = Opc.Ua.BrowseNames.DefaultApplicationGroup,
-                CertificateTypes = new NodeId[] { },
-                ApplicationCertificates = new CertificateIdentifierCollection(),
-                IssuerStore = new CertificateStoreIdentifier(configuration.SecurityConfiguration.TrustedIssuerCertificates.StorePath),
-                TrustedStore = new CertificateStoreIdentifier(configuration.SecurityConfiguration.TrustedPeerCertificates.StorePath)
+            var defaultApplicationGroup = new ServerCertificateGroup
+            {
+                NodeId = ObjectIds.ServerConfiguration_CertificateGroups_DefaultApplicationGroup,
+                BrowseName = BrowseNames.DefaultApplicationGroup,
+                CertificateTypes = [],
+                ApplicationCertificates = [],
+                IssuerStore = new CertificateStoreIdentifier(
+                    configuration.SecurityConfiguration.TrustedIssuerCertificates.StorePath
+                ),
+                TrustedStore = new CertificateStoreIdentifier(
+                    configuration.SecurityConfiguration.TrustedPeerCertificates.StorePath)
             };
+            m_certificateGroups.Add(defaultApplicationGroup);
+
+            if (configuration.SecurityConfiguration.UserIssuerCertificates != null &&
+                configuration.SecurityConfiguration.TrustedUserCertificates != null)
+            {
+                var defaultUserGroup = new ServerCertificateGroup
+                {
+                    NodeId = ObjectIds.ServerConfiguration_CertificateGroups_DefaultUserTokenGroup,
+                    BrowseName = BrowseNames.DefaultUserTokenGroup,
+                    CertificateTypes = [],
+                    ApplicationCertificates = [],
+                    IssuerStore = new CertificateStoreIdentifier(
+                        configuration.SecurityConfiguration.UserIssuerCertificates.StorePath
+                    ),
+                    TrustedStore = new CertificateStoreIdentifier(
+                        configuration.SecurityConfiguration.TrustedUserCertificates.StorePath)
+                };
+
+                m_certificateGroups.Add(defaultUserGroup);
+            }
+            ServerCertificateGroup defaultHttpsGroup = null;
+            if (configuration.SecurityConfiguration.HttpsIssuerCertificates != null &&
+                configuration.SecurityConfiguration.TrustedHttpsCertificates != null)
+            {
+                defaultHttpsGroup = new ServerCertificateGroup
+                {
+                    NodeId = ObjectIds.ServerConfiguration_CertificateGroups_DefaultHttpsGroup,
+                    BrowseName = BrowseNames.DefaultHttpsGroup,
+                    CertificateTypes = [],
+                    ApplicationCertificates = [],
+                    IssuerStore = new CertificateStoreIdentifier(
+                        configuration.SecurityConfiguration.HttpsIssuerCertificates.StorePath
+                    ),
+                    TrustedStore = new CertificateStoreIdentifier(
+                        configuration.SecurityConfiguration.TrustedHttpsCertificates.StorePath)
+                };
+
+                m_certificateGroups.Add(defaultHttpsGroup);
+            }
 
             // For each certificate in ApplicationCertificates, add the certificate type to ServerConfiguration_CertificateGroups_DefaultApplicationGroup
             // under the CertificateTypes field.
-            foreach (var cert in configuration.SecurityConfiguration.ApplicationCertificates)
+            foreach (CertificateIdentifier cert in configuration.SecurityConfiguration
+                .ApplicationCertificates)
             {
-                defaultApplicationGroup.CertificateTypes = defaultApplicationGroup.CertificateTypes.Concat(new NodeId[] { cert.CertificateType }).ToArray();
+                defaultApplicationGroup.CertificateTypes =
+                [
+                    .. defaultApplicationGroup.CertificateTypes,
+                    .. new NodeId[] { cert.CertificateType }
+                ];
                 defaultApplicationGroup.ApplicationCertificates.Add(cert);
+
+                if (cert.CertificateType == ObjectTypeIds.HttpsCertificateType &&
+                    defaultHttpsGroup != null)
+                {
+                    defaultHttpsGroup.CertificateTypes =
+                    [
+                        .. defaultHttpsGroup.CertificateTypes,
+                        .. new NodeId[] { cert.CertificateType }
+                    ];
+                    defaultHttpsGroup.ApplicationCertificates.Add(cert);
+                }
             }
-
-            m_certificateGroups.Add(defaultApplicationGroup);
         }
-        #endregion
 
-        #region INodeManager Members
         /// <summary>
         /// Replaces the generic node with a node specific to the model.
         /// </summary>
@@ -106,19 +162,16 @@ namespace Opc.Ua.Server
             ISystemContext context,
             NodeState predefinedNode)
         {
-            BaseObjectState passiveNode = predefinedNode as BaseObjectState;
-
-            if (passiveNode != null)
+            if (predefinedNode is BaseObjectState passiveNode)
             {
                 NodeId typeId = passiveNode.TypeDefinitionId;
                 if (IsNodeIdInNamespace(typeId) && typeId.IdType == IdType.Numeric)
                 {
                     switch ((uint)typeId.Identifier)
                     {
-
                         case ObjectTypes.ServerConfigurationType:
                         {
-                            ServerConfigurationState activeNode = new ServerConfigurationState(passiveNode.Parent);
+                            var activeNode = new ServerConfigurationState(passiveNode.Parent);
 
                             activeNode.GetCertificates = new GetCertificatesMethodState(activeNode);
 
@@ -133,59 +186,61 @@ namespace Opc.Ua.Server
                             }
                             else
                             {
-                                var serverNode = FindNodeInAddressSpace(ObjectIds.Server);
+                                NodeState serverNode = FindNodeInAddressSpace(ObjectIds.Server);
                                 serverNode?.ReplaceChild(context, activeNode);
                             }
                             // remove the reference to server node because it is set as parent
-                            activeNode.RemoveReference(ReferenceTypeIds.HasComponent, true, ObjectIds.Server);
+                            activeNode.RemoveReference(
+                                ReferenceTypeIds.HasComponent,
+                                true,
+                                ObjectIds.Server);
 
                             return activeNode;
                         }
-
                         case ObjectTypes.CertificateGroupFolderType:
                         {
-                            CertificateGroupFolderState activeNode = new CertificateGroupFolderState(passiveNode.Parent);
+                            var activeNode = new CertificateGroupFolderState(passiveNode.Parent);
                             activeNode.Create(context, passiveNode);
 
                             // delete unsupported groups
-                            if (m_certificateGroups.All(group => group.BrowseName != activeNode.DefaultHttpsGroup?.BrowseName))
+                            if (m_certificateGroups.All(group =>
+                                    group.BrowseName != activeNode.DefaultHttpsGroup?.BrowseName))
                             {
                                 activeNode.DefaultHttpsGroup = null;
                             }
-                            if (m_certificateGroups.All(group => group.BrowseName != activeNode.DefaultUserTokenGroup?.BrowseName))
+                            if (m_certificateGroups.All(group =>
+                                    group.BrowseName != activeNode.DefaultUserTokenGroup?
+                                        .BrowseName))
                             {
                                 activeNode.DefaultUserTokenGroup = null;
                             }
-                            if (m_certificateGroups.All(group => group.BrowseName != activeNode.DefaultApplicationGroup?.BrowseName))
+                            if (m_certificateGroups.All(group =>
+                                    group.BrowseName != activeNode.DefaultApplicationGroup?
+                                        .BrowseName))
                             {
                                 activeNode.DefaultApplicationGroup = null;
                             }
 
                             // replace the node in the parent.
-                            if (passiveNode.Parent != null)
-                            {
-                                passiveNode.Parent.ReplaceChild(context, activeNode);
-                            }
+                            passiveNode.Parent?.ReplaceChild(context, activeNode);
                             return activeNode;
                         }
-
                         case ObjectTypes.CertificateGroupType:
                         {
-                            var result = m_certificateGroups.FirstOrDefault(group => group.NodeId == passiveNode.NodeId);
+                            ServerCertificateGroup result = m_certificateGroups
+                                .FirstOrDefault(group =>
+                                    group.NodeId == passiveNode.NodeId);
 
                             if (result != null)
                             {
-                                CertificateGroupState activeNode = new CertificateGroupState(passiveNode.Parent);
+                                var activeNode = new CertificateGroupState(passiveNode.Parent);
                                 activeNode.Create(context, passiveNode);
 
                                 result.NodeId = activeNode.NodeId;
                                 result.Node = activeNode;
 
                                 // replace the node in the parent.
-                                if (passiveNode.Parent != null)
-                                {
-                                    passiveNode.Parent.ReplaceChild(context, activeNode);
-                                }
+                                passiveNode.Parent?.ReplaceChild(context, activeNode);
                                 return activeNode;
                             }
                         }
@@ -195,9 +250,7 @@ namespace Opc.Ua.Server
             }
             return base.AddBehaviourToPredefinedNode(context, predefinedNode);
         }
-        #endregion
 
-        #region Public methods
         /// <summary>
         /// Creates the configuration node for the server.
         /// </summary>
@@ -206,27 +259,46 @@ namespace Opc.Ua.Server
             ApplicationConfiguration configuration)
         {
             // setup server configuration node
-            m_serverConfigurationNode.ServerCapabilities.Value = configuration.ServerConfiguration.ServerCapabilities.ToArray();
+            m_serverConfigurationNode.ServerCapabilities.Value =
+            [
+                .. configuration.ServerConfiguration.ServerCapabilities
+            ];
             m_serverConfigurationNode.ServerCapabilities.ValueRank = ValueRanks.OneDimension;
-            m_serverConfigurationNode.ServerCapabilities.ArrayDimensions = new ReadOnlyList<uint>(new List<uint> { 0 });
-            m_serverConfigurationNode.SupportedPrivateKeyFormats.Value = configuration.ServerConfiguration.SupportedPrivateKeyFormats.ToArray();
-            m_serverConfigurationNode.SupportedPrivateKeyFormats.ValueRank = ValueRanks.OneDimension;
-            m_serverConfigurationNode.SupportedPrivateKeyFormats.ArrayDimensions = new ReadOnlyList<uint>(new List<uint> { 0 });
-            m_serverConfigurationNode.MaxTrustListSize.Value = (uint)configuration.ServerConfiguration.MaxTrustListSize;
-            m_serverConfigurationNode.MulticastDnsEnabled.Value = configuration.ServerConfiguration.MultiCastDnsEnabled;
+            m_serverConfigurationNode.ServerCapabilities.ArrayDimensions
+                = new ReadOnlyList<uint>([0]);
+            m_serverConfigurationNode.SupportedPrivateKeyFormats.Value =
+            [
+                .. configuration.ServerConfiguration.SupportedPrivateKeyFormats
+            ];
+            m_serverConfigurationNode.SupportedPrivateKeyFormats.ValueRank = ValueRanks
+                .OneDimension;
+            m_serverConfigurationNode.SupportedPrivateKeyFormats.ArrayDimensions
+                = new ReadOnlyList<uint>([0]);
+            m_serverConfigurationNode.MaxTrustListSize.Value = (uint)configuration
+                .ServerConfiguration
+                .MaxTrustListSize;
+            m_serverConfigurationNode.MulticastDnsEnabled.Value = configuration.ServerConfiguration
+                .MultiCastDnsEnabled;
 
-            m_serverConfigurationNode.UpdateCertificate.OnCall = new UpdateCertificateMethodStateMethodCallHandler(UpdateCertificate);
-            m_serverConfigurationNode.CreateSigningRequest.OnCall = new CreateSigningRequestMethodStateMethodCallHandler(CreateSigningRequest);
-            m_serverConfigurationNode.ApplyChanges.OnCallMethod = new GenericMethodCalledEventHandler(ApplyChanges);
-            m_serverConfigurationNode.GetRejectedList.OnCall = new GetRejectedListMethodStateMethodCallHandler(GetRejectedList);
-            m_serverConfigurationNode.GetCertificates.OnCall = new GetCertificatesMethodStateMethodCallHandler(GetCertificates);
+            m_serverConfigurationNode.UpdateCertificate.OnCallAsync
+                = new UpdateCertificateMethodStateMethodAsyncCallHandler(
+                UpdateCertificateAsync);
+            m_serverConfigurationNode.CreateSigningRequest.OnCallAsync =
+                new CreateSigningRequestMethodStateMethodAsyncCallHandler(CreateSigningRequestAsync);
+            m_serverConfigurationNode.ApplyChanges.OnCallMethod2
+                = new GenericMethodCalledEventHandler2(ApplyChanges);
+            m_serverConfigurationNode.GetRejectedList.OnCall
+                = new GetRejectedListMethodStateMethodCallHandler(
+                GetRejectedList);
+            m_serverConfigurationNode.GetCertificates.OnCall
+                = new GetCertificatesMethodStateMethodCallHandler(
+                GetCertificates);
             m_serverConfigurationNode.ClearChangeMasks(systemContext, true);
 
             // setup certificate group trust list handlers
-            foreach (var certGroup in m_certificateGroups)
+            foreach (ServerCertificateGroup certGroup in m_certificateGroups)
             {
-                certGroup.Node.CertificateTypes.Value =
-                    certGroup.CertificateTypes;
+                certGroup.Node.CertificateTypes.Value = certGroup.CertificateTypes;
                 certGroup.Node.TrustList.Handle = new TrustList(
                     certGroup.Node.TrustList,
                     certGroup.TrustedStore,
@@ -237,21 +309,17 @@ namespace Opc.Ua.Server
             }
 
             // find ServerNamespaces node and subscribe to StateChanged
-            NamespacesState serverNamespacesNode = FindPredefinedNode(ObjectIds.Server_Namespaces, typeof(NamespacesState)) as NamespacesState;
 
-            if (serverNamespacesNode != null)
+            if (FindPredefinedNode(ObjectIds.Server_Namespaces, typeof(NamespacesState))
+                is NamespacesState serverNamespacesNode)
             {
                 serverNamespacesNode.StateChanged += ServerNamespacesChanged;
             }
         }
 
-
-
         /// <summary>
         /// Gets and returns the <see cref="NamespaceMetadataState"/> node associated with the specified NamespaceUri
         /// </summary>
-        /// <param name="namespaceUri"></param>
-        /// <returns></returns>
         public NamespaceMetadataState GetNamespaceMetadataState(string namespaceUri)
         {
             if (namespaceUri == null)
@@ -259,12 +327,15 @@ namespace Opc.Ua.Server
                 return null;
             }
 
-            if (m_namespaceMetadataStates.ContainsKey(namespaceUri))
+            if (m_namespaceMetadataStates.TryGetValue(
+                namespaceUri,
+                out NamespaceMetadataState value))
             {
-                return m_namespaceMetadataStates[namespaceUri];
+                return value;
             }
 
-            NamespaceMetadataState namespaceMetadataState = FindNamespaceMetadataState(namespaceUri);
+            NamespaceMetadataState namespaceMetadataState = FindNamespaceMetadataState(
+                namespaceUri);
 
             lock (Lock)
             {
@@ -278,26 +349,34 @@ namespace Opc.Ua.Server
         /// <summary>
         /// Gets or creates the <see cref="NamespaceMetadataState"/> node for the specified NamespaceUri.
         /// </summary>
-        /// <param name="namespaceUri"></param>
-        /// <returns></returns>
         public NamespaceMetadataState CreateNamespaceMetadataState(string namespaceUri)
         {
-            NamespaceMetadataState namespaceMetadataState = FindNamespaceMetadataState(namespaceUri);
+            NamespaceMetadataState namespaceMetadataState = FindNamespaceMetadataState(
+                namespaceUri);
 
             if (namespaceMetadataState == null)
             {
                 // find ServerNamespaces node
-                NamespacesState serverNamespacesNode = FindPredefinedNode(ObjectIds.Server_Namespaces, typeof(NamespacesState)) as NamespacesState;
-                if (serverNamespacesNode == null)
+                if (FindPredefinedNode(ObjectIds.Server_Namespaces, typeof(NamespacesState))
+                    is not NamespacesState serverNamespacesNode)
                 {
-                    Utils.LogError("Cannot create NamespaceMetadataState for namespace '{0}'.", namespaceUri);
+                    Utils.LogError(
+                        "Cannot create NamespaceMetadataState for namespace '{0}'.",
+                        namespaceUri);
                     return null;
                 }
 
                 // create the NamespaceMetadata node
-                namespaceMetadataState = new NamespaceMetadataState(serverNamespacesNode);
-                namespaceMetadataState.BrowseName = new QualifiedName(namespaceUri, NamespaceIndex);
-                namespaceMetadataState.Create(SystemContext, null, namespaceMetadataState.BrowseName, null, true);
+                namespaceMetadataState = new NamespaceMetadataState(serverNamespacesNode)
+                {
+                    BrowseName = new QualifiedName(namespaceUri, NamespaceIndex)
+                };
+                namespaceMetadataState.Create(
+                    SystemContext,
+                    null,
+                    namespaceMetadataState.BrowseName,
+                    null,
+                    true);
                 namespaceMetadataState.DisplayName = namespaceUri;
                 namespaceMetadataState.SymbolicName = namespaceUri;
                 namespaceMetadataState.NamespaceUri.Value = namespaceUri;
@@ -314,7 +393,6 @@ namespace Opc.Ua.Server
         /// <summary>
         /// Determine if the impersonated user has admin access.
         /// </summary>
-        /// <param name="context"></param>
         /// <exception cref="ServiceResultException"/>
         /// <seealso cref="StatusCodes.BadUserAccessDenied"/>
         public void HasApplicationSecureAdminAccess(ISystemContext context)
@@ -322,37 +400,38 @@ namespace Opc.Ua.Server
             HasApplicationSecureAdminAccess(context, null);
         }
 
-
         /// <summary>
         /// Determine if the impersonated user has admin access.
         /// </summary>
-        /// <param name="context"></param>
-        /// <param name="_"></param>
         /// <exception cref="ServiceResultException"/>
         /// <seealso cref="StatusCodes.BadUserAccessDenied"/>
-        public void HasApplicationSecureAdminAccess(ISystemContext context, CertificateStoreIdentifier _)
+        public void HasApplicationSecureAdminAccess(
+            ISystemContext context,
+            CertificateStoreIdentifier _)
         {
-            OperationContext operationContext = (context as SystemContext)?.OperationContext as OperationContext;
-            if (operationContext != null)
+            if (context is SystemContext { OperationContext: OperationContext operationContext })
             {
-                if (operationContext.ChannelContext?.EndpointDescription?.SecurityMode != MessageSecurityMode.SignAndEncrypt)
+                if (operationContext.ChannelContext?.EndpointDescription?.SecurityMode !=
+                    MessageSecurityMode.SignAndEncrypt)
                 {
-                    throw new ServiceResultException(StatusCodes.BadUserAccessDenied, "Access to this item is only allowed with MessageSecurityMode SignAndEncrypt.");
+                    throw new ServiceResultException(
+                        StatusCodes.BadUserAccessDenied,
+                        "Access to this item is only allowed with MessageSecurityMode SignAndEncrypt.");
                 }
                 IUserIdentity identity = operationContext.UserIdentity;
                 // allow access to system configuration only with Role SecurityAdmin
-                if (identity == null || identity.TokenType == UserTokenType.Anonymous ||
+                if (identity == null ||
+                    identity.TokenType == UserTokenType.Anonymous ||
                     !identity.GrantedRoleIds.Contains(ObjectIds.WellKnownRole_SecurityAdmin))
                 {
-                    throw new ServiceResultException(StatusCodes.BadUserAccessDenied, "Security Admin Role required to access this item.");
+                    throw new ServiceResultException(
+                        StatusCodes.BadUserAccessDenied,
+                        "Security Admin Role required to access this item.");
                 }
-
             }
         }
-        #endregion
 
-        #region Private Methods
-        private ServiceResult UpdateCertificate(
+        private async ValueTask<UpdateCertificateMethodStateResult> UpdateCertificateAsync(
            ISystemContext context,
            MethodState method,
            NodeId objectId,
@@ -362,14 +441,27 @@ namespace Opc.Ua.Server
            byte[][] issuerCertificates,
            string privateKeyFormat,
            byte[] privateKey,
-           ref bool applyChangesRequired)
+           CancellationToken cancellation)
         {
+            bool applyChangesRequired = false;
             HasApplicationSecureAdminAccess(context);
 
-            object[] inputArguments = new object[] { certificateGroupId, certificateTypeId, certificate, issuerCertificates, privateKeyFormat, privateKey };
+            object[] inputArguments =
+            [
+                certificateGroupId,
+                certificateTypeId,
+                certificate,
+                issuerCertificates,
+                privateKeyFormat,
+                privateKey
+            ];
             X509Certificate2 newCert = null;
 
-            Server.ReportCertificateUpdateRequestedAuditEvent(context, objectId, method, inputArguments);
+            Server.ReportCertificateUpdateRequestedAuditEvent(
+                context,
+                objectId,
+                method,
+                inputArguments);
             try
             {
                 if (certificate == null)
@@ -378,12 +470,18 @@ namespace Opc.Ua.Server
                 }
 
                 privateKeyFormat = privateKeyFormat?.ToUpper();
-                if (!(String.IsNullOrEmpty(privateKeyFormat) || privateKeyFormat == "PEM" || privateKeyFormat == "PFX"))
+                if (!(string.IsNullOrEmpty(privateKeyFormat) ||
+                    privateKeyFormat == "PEM" ||
+                    privateKeyFormat == "PFX"))
                 {
-                    throw new ServiceResultException(StatusCodes.BadNotSupported, "The private key format is not supported.");
+                    throw new ServiceResultException(
+                        StatusCodes.BadNotSupported,
+                        "The private key format is not supported.");
                 }
 
-                ServerCertificateGroup certificateGroup = VerifyGroupAndTypeId(certificateGroupId, certificateTypeId);
+                ServerCertificateGroup certificateGroup = VerifyGroupAndTypeId(
+                    certificateGroupId,
+                    certificateTypeId);
                 certificateGroup.UpdateCertificate = null;
 
                 try
@@ -392,23 +490,36 @@ namespace Opc.Ua.Server
                 }
                 catch
                 {
-                    throw new ServiceResultException(StatusCodes.BadCertificateInvalid, "Certificate data is invalid.");
+                    throw new ServiceResultException(
+                        StatusCodes.BadCertificateInvalid,
+                        "Certificate data is invalid.");
+                }
+
+                // validate certificate type of new certificate
+                if (!CertificateIdentifier.ValidateCertificateType(newCert, certificateTypeId))
+                {
+                    throw new ServiceResultException(
+                        StatusCodes.BadCertificateInvalid,
+                        "Certificate type of new certificate doesn't match the provided certificate type.");
                 }
 
                 // identify the existing certificate to be updated
                 // it should be of the same type and same subject name as the new certificate
-                CertificateIdentifier existingCertIdentifier = certificateGroup.ApplicationCertificates.FirstOrDefault(cert =>
-                    X509Utils.CompareDistinguishedName(cert.Certificate.Subject, newCert.Subject) &&
-                    cert.CertificateType == certificateTypeId);
+                CertificateIdentifier existingCertIdentifier =
+                    (
+                        certificateGroup.ApplicationCertificates.FirstOrDefault(cert =>
+                            X509Utils.CompareDistinguishedName(cert.SubjectName, newCert.Subject) &&
+                            cert.CertificateType == certificateTypeId)
+                        ?? certificateGroup.ApplicationCertificates.FirstOrDefault(cert =>
+                            cert.Certificate != null &&
+                            m_configuration.ApplicationUri ==
+                                X509Utils.GetApplicationUriFromCertificate(cert.Certificate) &&
+                            cert.CertificateType == certificateTypeId))
+                    ?? throw new ServiceResultException(
+                        StatusCodes.BadInvalidArgument,
+                        "No existing certificate found for the specified certificate type and subject name.");
 
-                // if there is no such existing certificate then this is an error
-                if (existingCertIdentifier == null)
-                {
-                    throw new ServiceResultException(StatusCodes.BadInvalidArgument, "No existing certificate found for the specified certificate type and subject name.");
-                }
-
-
-                X509Certificate2Collection newIssuerCollection = new X509Certificate2Collection();
+                var newIssuerCollection = new X509Certificate2Collection();
 
                 try
                 {
@@ -417,32 +528,26 @@ namespace Opc.Ua.Server
                     {
                         foreach (byte[] issuerRawCert in issuerCertificates)
                         {
-                            var newIssuerCert = X509CertificateLoader.LoadCertificate(issuerRawCert);
+                            X509Certificate2 newIssuerCert = X509CertificateLoader.LoadCertificate(
+                                issuerRawCert);
                             newIssuerCollection.Add(newIssuerCert);
                         }
                     }
-
                 }
                 catch
                 {
-                    throw new ServiceResultException(StatusCodes.BadCertificateInvalid, "Certificate data is invalid.");
-                }
-
-                // validate new subject matches the previous subject,
-                // otherwise application may not be able to find it after restart
-                // TODO: An issuer may modify the subject of an issued certificate,
-                // but then the configuration must be updated too!
-                // NOTE: not a strict requirement here for ASN.1 byte compare 
-                if (!X509Utils.CompareDistinguishedName(existingCertIdentifier.Certificate.Subject, newCert.Subject))
-                {
-                    throw new ServiceResultException(StatusCodes.BadSecurityChecksFailed, "Subject Name of new certificate doesn't match the application.");
+                    throw new ServiceResultException(
+                        StatusCodes.BadCertificateInvalid,
+                        "Certificate data is invalid.");
                 }
 
                 // self signed
                 bool selfSigned = X509Utils.IsSelfSigned(newCert);
                 if (selfSigned && newIssuerCollection.Count != 0)
                 {
-                    throw new ServiceResultException(StatusCodes.BadCertificateInvalid, "Issuer list not empty for self signed certificate.");
+                    throw new ServiceResultException(
+                        StatusCodes.BadCertificateInvalid,
+                        "Issuer list not empty for self signed certificate.");
                 }
 
                 if (!selfSigned)
@@ -450,10 +555,10 @@ namespace Opc.Ua.Server
                     try
                     {
                         // verify cert with issuer chain
-                        CertificateValidator certValidator = new CertificateValidator();
-                        CertificateTrustList issuerStore = new CertificateTrustList();
-                        CertificateIdentifierCollection issuerCollection = new CertificateIdentifierCollection();
-                        foreach (var issuerCert in newIssuerCollection)
+                        var certValidator = new CertificateValidator();
+                        var issuerStore = new CertificateTrustList();
+                        var issuerCollection = new CertificateIdentifierCollection();
+                        foreach (X509Certificate2 issuerCert in newIssuerCollection)
                         {
                             issuerCollection.Add(new CertificateIdentifier(issuerCert));
                         }
@@ -463,14 +568,19 @@ namespace Opc.Ua.Server
                     }
                     catch (Exception ex)
                     {
-                        throw new ServiceResultException(StatusCodes.BadSecurityChecksFailed, "Failed to verify integrity of the new certificate and the issuer list.", ex);
+                        throw new ServiceResultException(
+                            StatusCodes.BadSecurityChecksFailed,
+                            "Failed to verify integrity of the new certificate and the issuer list.",
+                            ex);
                     }
                 }
 
                 var updateCertificate = new UpdateCertificateData();
                 try
                 {
-                    var passwordProvider = m_configuration.SecurityConfiguration.CertificatePasswordProvider;
+                    ICertificatePasswordProvider passwordProvider = m_configuration
+                        .SecurityConfiguration
+                        .CertificatePasswordProvider;
                     switch (privateKeyFormat)
                     {
                         case null:
@@ -478,30 +588,54 @@ namespace Opc.Ua.Server
                         {
                             X509Certificate2 exportableKey;
                             //use the new generated private key if one exists and matches the provided public key
-                            if (certificateGroup.TemporaryApplicationCertificate != null && X509Utils.VerifyRSAKeyPair(newCert, certificateGroup.TemporaryApplicationCertificate))
+                            if (certificateGroup.TemporaryApplicationCertificate != null &&
+                                X509Utils.VerifyKeyPair(
+                                    newCert,
+                                    certificateGroup.TemporaryApplicationCertificate))
                             {
-                                exportableKey = X509Utils.CreateCopyWithPrivateKey(certificateGroup.TemporaryApplicationCertificate, false);
+                                exportableKey = X509Utils.CreateCopyWithPrivateKey(
+                                    certificateGroup.TemporaryApplicationCertificate,
+                                    false);
                             }
                             else
                             {
-                                X509Certificate2 certWithPrivateKey = existingCertIdentifier.LoadPrivateKeyEx(passwordProvider).Result;
-                                exportableKey = X509Utils.CreateCopyWithPrivateKey(certWithPrivateKey, false);
+                                X509Certificate2 certWithPrivateKey = await existingCertIdentifier
+                                    .LoadPrivateKeyExAsync(
+                                        passwordProvider,
+                                        m_configuration.ApplicationUri,
+                                        cancellation)
+                                    .ConfigureAwait(false);
+                                exportableKey = X509Utils.CreateCopyWithPrivateKey(
+                                    certWithPrivateKey,
+                                    false);
                             }
 
-                            updateCertificate.CertificateWithPrivateKey = CertificateFactory.CreateCertificateWithPrivateKey(newCert, exportableKey);
+                            updateCertificate.CertificateWithPrivateKey =
+                                CertificateFactory.CreateCertificateWithPrivateKey(
+                                    newCert,
+                                    exportableKey);
                             break;
                         }
                         case "PFX":
                         {
-                            X509Certificate2 certWithPrivateKey = X509Utils.CreateCertificateFromPKCS12(privateKey, passwordProvider?.GetPassword(existingCertIdentifier), true);
-                            updateCertificate.CertificateWithPrivateKey = CertificateFactory.CreateCertificateWithPrivateKey(newCert, certWithPrivateKey);
+                            X509Certificate2 certWithPrivateKey = X509Utils
+                                .CreateCertificateFromPKCS12(
+                                    privateKey,
+                                    passwordProvider?.GetPassword(existingCertIdentifier),
+                                    true);
+                            updateCertificate.CertificateWithPrivateKey =
+                                CertificateFactory.CreateCertificateWithPrivateKey(
+                                    newCert,
+                                    certWithPrivateKey);
                             break;
                         }
                         case "PEM":
-                        {
-                            updateCertificate.CertificateWithPrivateKey = CertificateFactory.CreateCertificateWithPEMPrivateKey(newCert, privateKey, passwordProvider?.GetPassword(existingCertIdentifier));
+                            updateCertificate.CertificateWithPrivateKey =
+                                CertificateFactory.CreateCertificateWithPEMPrivateKey(
+                                    newCert,
+                                    privateKey,
+                                    passwordProvider?.GetPassword(existingCertIdentifier));
                             break;
-                        }
                     }
                     //dispose temporary new private key as it is no longer needed
                     certificateGroup.TemporaryApplicationCertificate?.Dispose();
@@ -512,7 +646,9 @@ namespace Opc.Ua.Server
                 }
                 catch
                 {
-                    throw new ServiceResultException(StatusCodes.BadSecurityChecksFailed, "Failed to verify integrity of the new certificate and the private key.");
+                    throw new ServiceResultException(
+                        StatusCodes.BadSecurityChecksFailed,
+                        "Failed to verify integrity of the new certificate and the private key.");
                 }
 
                 certificateGroup.UpdateCertificate = updateCertificate;
@@ -524,26 +660,64 @@ namespace Opc.Ua.Server
                     {
                         using (ICertificateStore appStore = existingCertIdentifier.OpenStore())
                         {
-                            Utils.LogCertificate(Utils.TraceMasks.Security, "Delete application certificate: ", existingCertIdentifier.Certificate);
-                            appStore.Delete(existingCertIdentifier.Thumbprint).Wait();
-                            Utils.LogCertificate(Utils.TraceMasks.Security, "Add new application certificate: ", updateCertificate.CertificateWithPrivateKey);
-                            var passwordProvider = m_configuration.SecurityConfiguration.CertificatePasswordProvider;
-                            appStore.Add(updateCertificate.CertificateWithPrivateKey, passwordProvider?.GetPassword(existingCertIdentifier)).Wait();
+                            if (appStore == null)
+                            {
+                                throw new ServiceResultException(
+                                    StatusCodes.BadConfigurationError,
+                                    "Failed to open application certificate store.");
+                            }
+
+                            Utils.LogCertificate(
+                                Utils.TraceMasks.Security,
+                                "Delete application certificate: ",
+                                existingCertIdentifier.Certificate);
+                            appStore.DeleteAsync(existingCertIdentifier.Thumbprint, cancellation)
+                                .Wait(cancellation);
+                            Utils.LogCertificate(
+                                Utils.TraceMasks.Security,
+                                "Add new application certificate: ",
+                                updateCertificate.CertificateWithPrivateKey);
+                            ICertificatePasswordProvider passwordProvider = m_configuration
+                                .SecurityConfiguration
+                                .CertificatePasswordProvider;
+                            appStore
+                                .AddAsync(
+                                    updateCertificate.CertificateWithPrivateKey,
+                                    passwordProvider?.GetPassword(existingCertIdentifier),
+                                    cancellation)
+                                .Wait(cancellation);
                             // keep only track of cert without private key
-                            var certOnly = X509CertificateLoader.LoadCertificate(updateCertificate.CertificateWithPrivateKey.RawData);
+                            X509Certificate2 certOnly = X509CertificateLoader.LoadCertificate(
+                                updateCertificate.CertificateWithPrivateKey.RawData);
                             updateCertificate.CertificateWithPrivateKey.Dispose();
                             updateCertificate.CertificateWithPrivateKey = certOnly;
+                            //update certificate identifier with new certificate
+                            await existingCertIdentifier.FindAsync(
+                                m_configuration.ApplicationUri,
+                                cancellation)
+                                .ConfigureAwait(false);
                         }
 
                         ICertificateStore issuerStore = certificateGroup.IssuerStore.OpenStore();
                         try
                         {
-                            foreach (var issuer in updateCertificate.IssuerCollection)
+                            if (issuerStore == null)
+                            {
+                                throw new ServiceResultException(
+                                    StatusCodes.BadConfigurationError,
+                                    "Failed to open issuer certificate store.");
+                            }
+
+                            foreach (X509Certificate2 issuer in updateCertificate.IssuerCollection)
                             {
                                 try
                                 {
-                                    Utils.LogCertificate(Utils.TraceMasks.Security, "Add new issuer certificate: ", issuer);
-                                    issuerStore.Add(issuer).Wait();
+                                    Utils.LogCertificate(
+                                        Utils.TraceMasks.Security,
+                                        "Add new issuer certificate: ",
+                                        issuer);
+                                    issuerStore.AddAsync(issuer, ct: cancellation)
+                                        .Wait(cancellation);
                                 }
                                 catch (ArgumentException)
                                 {
@@ -556,28 +730,50 @@ namespace Opc.Ua.Server
                             issuerStore?.Close();
                         }
 
-                        Server.ReportCertificateUpdatedAuditEvent(context, objectId, method, inputArguments, certificateGroupId, certificateTypeId);
+                        Server.ReportCertificateUpdatedAuditEvent(
+                            context,
+                            objectId,
+                            method,
+                            inputArguments,
+                            certificateGroupId,
+                            certificateTypeId);
                     }
                     catch (Exception ex)
                     {
-                        Utils.LogError(Utils.TraceMasks.Security, ServiceResult.BuildExceptionTrace(ex));
-                        throw new ServiceResultException(StatusCodes.BadSecurityChecksFailed, "Failed to update certificate.", ex);
+                        Utils.LogError(
+                            Utils.TraceMasks.Security,
+                            ServiceResult.BuildExceptionTrace(ex));
+                        throw new ServiceResultException(
+                            StatusCodes.BadSecurityChecksFailed,
+                            "Failed to update certificate.",
+                            ex);
                     }
                 }
             }
             catch (Exception e)
             {
                 // report the failure of UpdateCertificate via an audit event
-                Server.ReportCertificateUpdatedAuditEvent(context, objectId, method, inputArguments, certificateGroupId, certificateTypeId, e);
-                // Raise audit certificate event 
+                Server.ReportCertificateUpdatedAuditEvent(
+                    context,
+                    objectId,
+                    method,
+                    inputArguments,
+                    certificateGroupId,
+                    certificateTypeId,
+                    e);
+                // Raise audit certificate event
                 Server.ReportAuditCertificateEvent(newCert, e);
                 throw;
             }
 
-            return ServiceResult.Good;
+            return new UpdateCertificateMethodStateResult
+            {
+                ServiceResult = ServiceResult.Good,
+                ApplyChangesRequired = applyChangesRequired
+            };
         }
 
-        private ServiceResult CreateSigningRequest(
+        private async ValueTask<CreateSigningRequestMethodStateResult> CreateSigningRequestAsync(
             ISystemContext context,
             MethodState method,
             NodeId objectId,
@@ -586,63 +782,113 @@ namespace Opc.Ua.Server
             string subjectName,
             bool regeneratePrivateKey,
             byte[] nonce,
-            ref byte[] certificateRequest)
+            CancellationToken cancellationToken)
         {
             HasApplicationSecureAdminAccess(context);
 
-            ServerCertificateGroup certificateGroup = VerifyGroupAndTypeId(certificateGroupId, certificateTypeId);
+            ServerCertificateGroup certificateGroup = VerifyGroupAndTypeId(
+                certificateGroupId,
+                certificateTypeId);
 
             // identify the existing certificate for which to CreateSigningRequest
             // it should be of the same type
-            CertificateIdentifier existingCertIdentifier = certificateGroup.ApplicationCertificates.FirstOrDefault(cert =>
-                cert.CertificateType == certificateTypeId);
+            CertificateIdentifier existingCertIdentifier = certificateGroup.ApplicationCertificates
+                .FirstOrDefault(
+                    cert => cert.CertificateType == certificateTypeId);
 
-            if (!String.IsNullOrEmpty(subjectName))
+            if (string.IsNullOrEmpty(subjectName))
             {
-                throw new ArgumentNullException(nameof(subjectName));
+                subjectName = existingCertIdentifier.Certificate.Subject;
             }
-
 
             certificateGroup.TemporaryApplicationCertificate?.Dispose();
             certificateGroup.TemporaryApplicationCertificate = null;
 
-            // TODO: ECC support for regenerative
             X509Certificate2 certWithPrivateKey;
-            if (regeneratePrivateKey && certificateTypeId == ObjectTypeIds.RsaSha256ApplicationCertificateType)
+            if (regeneratePrivateKey)
             {
-                ushort keySize = 0;
-                using (var publicKey = existingCertIdentifier.Certificate.GetRSAPublicKey())
-                {
-                    keySize = (ushort)(publicKey?.KeySize ?? 0);
-                }
-
-                certWithPrivateKey = CertificateFactory.CreateCertificate(
-                    m_configuration.ApplicationUri,
-                    null,
-                    existingCertIdentifier.Certificate.Subject,
-                    null)
-                    .SetNotBefore(DateTime.Today.AddDays(-1))
-                    .SetNotAfter(DateTime.Today.AddDays(14))
-                    .SetRSAKeySize(keySize)
-                    .CreateForRSA();
-
-                certificateGroup.TemporaryApplicationCertificate = certWithPrivateKey;
+                certWithPrivateKey = GenerateTemporaryApplicationCertificate(
+                    certificateTypeId,
+                    certificateGroup,
+                    subjectName);
             }
             else
             {
-                ICertificatePasswordProvider passwordProvider = m_configuration.SecurityConfiguration.CertificatePasswordProvider;
-                certWithPrivateKey = existingCertIdentifier.LoadPrivateKeyEx(passwordProvider).Result;
+                ICertificatePasswordProvider passwordProvider = m_configuration
+                    .SecurityConfiguration
+                    .CertificatePasswordProvider;
+                certWithPrivateKey = await existingCertIdentifier
+                    .LoadPrivateKeyExAsync(passwordProvider,
+                                           m_configuration.ApplicationUri,
+                                           cancellationToken)
+                    .ConfigureAwait(false);
+
+                if (certWithPrivateKey == null)
+                {
+                    throw ServiceResultException.Create(StatusCodes.BadInternalError, "Failed to load private key");
+                }
             }
 
-            Utils.LogCertificate(Utils.TraceMasks.Security, "Create signing request: ", certWithPrivateKey);
-            certificateRequest = CertificateFactory.CreateSigningRequest(certWithPrivateKey, X509Utils.GetDomainsFromCertificate(certWithPrivateKey));
+            Utils.LogCertificate(
+                Utils.TraceMasks.Security,
+                "Create signing request: ",
+                certWithPrivateKey);
+            byte[] certificateRequest = CertificateFactory.CreateSigningRequest(
+                certWithPrivateKey,
+                X509Utils.GetDomainsFromCertificate(certWithPrivateKey));
 
-            return ServiceResult.Good;
+            return new CreateSigningRequestMethodStateResult
+            {
+                ServiceResult = ServiceResult.Good,
+                CertificateRequest = certificateRequest
+            };
+        }
+
+        private X509Certificate2 GenerateTemporaryApplicationCertificate(
+            NodeId certificateTypeId,
+            ServerCertificateGroup certificateGroup,
+            string subjectName)
+        {
+            X509Certificate2 certificate;
+
+            ICertificateBuilder certificateBuilder = CertificateFactory
+                .CreateCertificate(m_configuration.ApplicationUri, null, subjectName, null)
+                .SetNotBefore(DateTime.Today.AddDays(-1))
+                .SetNotAfter(DateTime.Today.AddDays(14));
+
+            if (certificateTypeId == null ||
+                certificateTypeId == ObjectTypeIds.ApplicationCertificateType ||
+                certificateTypeId == ObjectTypeIds.RsaMinApplicationCertificateType ||
+                certificateTypeId == ObjectTypeIds.RsaSha256ApplicationCertificateType)
+            {
+                certificate = certificateBuilder.SetRSAKeySize(CertificateFactory.DefaultKeySize)
+                    .CreateForRSA();
+            }
+            else
+            {
+#if !ECC_SUPPORT
+                throw new ServiceResultException(
+                    StatusCodes.BadNotSupported,
+                    "The Ecc certificate type is not supported.");
+#else
+                ECCurve? curve =
+                    EccUtils.GetCurveFromCertificateTypeId(certificateTypeId)
+                    ?? throw new ServiceResultException(
+                        StatusCodes.BadNotSupported,
+                        "The Ecc certificate type is not supported.");
+                certificate = certificateBuilder.SetECCurve(curve.Value).CreateForECDsa();
+#endif
+            }
+
+            certificateGroup.TemporaryApplicationCertificate = certificate;
+
+            return certificate;
         }
 
         private ServiceResult ApplyChanges(
             ISystemContext context,
             MethodState method,
+            NodeId objectId,
             IList<object> inputArguments,
             IList<object> outputArguments)
         {
@@ -650,15 +896,17 @@ namespace Opc.Ua.Server
 
             bool disconnectSessions = false;
 
-            foreach (var certificateGroup in m_certificateGroups)
+            foreach (ServerCertificateGroup certificateGroup in m_certificateGroups)
             {
                 try
                 {
-                    var updateCertificate = certificateGroup.UpdateCertificate;
+                    UpdateCertificateData updateCertificate = certificateGroup.UpdateCertificate;
                     if (updateCertificate != null)
                     {
                         disconnectSessions = true;
-                        Utils.LogCertificate((int)Utils.TraceMasks.Security, "Apply Changes for certificate: ",
+                        Utils.LogCertificate(
+                            Utils.TraceMasks.Security,
+                            "Apply Changes for certificate: ",
                             updateCertificate.CertificateWithPrivateKey);
                     }
                 }
@@ -670,14 +918,30 @@ namespace Opc.Ua.Server
 
             if (disconnectSessions)
             {
-                Task.Run(async () => {
-                    Utils.LogInfo((int)Utils.TraceMasks.Security, "Apply Changes for application certificate update.");
+                Task.Run(async () =>
+                {
+                    Utils.LogInfo(
+                        Utils.TraceMasks.Security,
+                        "Apply Changes for application certificate update.");
                     // give the client some time to receive the response
                     // before the certificate update may disconnect all sessions
                     await Task.Delay(1000).ConfigureAwait(false);
-                    await m_configuration.CertificateValidator.UpdateCertificateAsync(m_configuration.SecurityConfiguration).ConfigureAwait(false);
-                }
-                );
+                    try
+                    {
+                        await m_configuration
+                            .CertificateValidator.UpdateCertificateAsync(
+                                m_configuration.SecurityConfiguration,
+                                m_configuration.ApplicationUri)
+                            .ConfigureAwait(false);
+                    }
+                    catch (Exception ex)
+                    {
+                        Utils.LogCritical(
+                            ex,
+                            "Failed to sucessfully Apply Changes: Error updating application instance certificates. Server could be in faulted state.");
+                        throw;
+                    }
+                });
             }
 
             return StatusCodes.Good;
@@ -694,20 +958,23 @@ namespace Opc.Ua.Server
             // No rejected store configured
             if (m_rejectedStore == null)
             {
-                certificates = Array.Empty<byte[]>();
+                certificates = [];
                 return StatusCodes.Good;
             }
 
             ICertificateStore store = m_rejectedStore.OpenStore();
             try
             {
-                X509Certificate2Collection collection = store.Enumerate().Result;
-                List<byte[]> rawList = new List<byte[]>();
-                foreach (var cert in collection)
+                if (store != null)
                 {
-                    rawList.Add(cert.RawData);
+                    X509Certificate2Collection collection = store.EnumerateAsync().Result;
+                    var rawList = new List<byte[]>();
+                    foreach (X509Certificate2 cert in collection)
+                    {
+                        rawList.Add(cert.RawData);
+                    }
+                    certificates = [.. rawList];
                 }
-                certificates = rawList.ToArray();
             }
             finally
             {
@@ -727,59 +994,54 @@ namespace Opc.Ua.Server
         {
             HasApplicationSecureAdminAccess(context);
 
-            ServerCertificateGroup certificateGroup = m_certificateGroups.FirstOrDefault(group => Utils.IsEqual(group.NodeId, certificateGroupId));
-            if (certificateGroup == null)
-            {
-                throw new ServiceResultException(StatusCodes.BadInvalidArgument, "Certificate group invalid.");
-            }
+            ServerCertificateGroup certificateGroup =
+                m_certificateGroups.FirstOrDefault(
+                    group => Utils.IsEqual(group.NodeId, certificateGroupId))
+                ?? throw new ServiceResultException(
+                    StatusCodes.BadInvalidArgument,
+                    "Certificate group invalid.");
 
-            NodeId certificateTypeId = certificateGroup.CertificateTypes.FirstOrDefault();
-
-            //TODO support multiple Application Instance Certificates
-            if (certificateTypeId != null)
-            {
-                certificateTypeIds = new NodeId[1] { certificateTypeId };
-                certificates = new byte[1][];
-                certificates[0] = certificateGroup.ApplicationCertificates[0].Certificate.GetRawCertData();
-            }
-            else
-            {
-                certificateTypeIds = new NodeId[0];
-                certificates = Array.Empty<byte[]>();
-            }
+            certificateTypeIds = certificateGroup.CertificateTypes;
+            certificates = [.. certificateGroup.ApplicationCertificates
+                .Select(s => s.Certificate?.RawData)];
 
             return ServiceResult.Good;
         }
 
-
         private ServerCertificateGroup VerifyGroupAndTypeId(
             NodeId certificateGroupId,
-            NodeId certificateTypeId
-            )
+            NodeId certificateTypeId)
         {
             // verify typeid must be set
             if (NodeId.IsNull(certificateTypeId))
             {
-                throw new ServiceResultException(StatusCodes.BadInvalidArgument, "Certificate type not specified.");
+                throw new ServiceResultException(
+                    StatusCodes.BadInvalidArgument,
+                    "Certificate type not specified.");
             }
 
             // verify requested certificate group
             if (NodeId.IsNull(certificateGroupId))
             {
-                certificateGroupId = ObjectIds.ServerConfiguration_CertificateGroups_DefaultApplicationGroup;
+                certificateGroupId = ObjectIds
+                    .ServerConfiguration_CertificateGroups_DefaultApplicationGroup;
             }
 
-            ServerCertificateGroup certificateGroup = m_certificateGroups.FirstOrDefault(group => Utils.IsEqual(group.NodeId, certificateGroupId));
-            if (certificateGroup == null)
-            {
-                throw new ServiceResultException(StatusCodes.BadInvalidArgument, "Certificate group invalid.");
-            }
+            ServerCertificateGroup certificateGroup =
+                m_certificateGroups.FirstOrDefault(
+                    group => Utils.IsEqual(group.NodeId, certificateGroupId))
+                ?? throw new ServiceResultException(
+                    StatusCodes.BadInvalidArgument,
+                    "Certificate group invalid.");
 
             // verify certificate type
-            bool foundCertType = certificateGroup.CertificateTypes.Any(t => Utils.IsEqual(t, certificateTypeId));
+            bool foundCertType = certificateGroup.CertificateTypes
+                .Any(t => Utils.IsEqual(t, certificateTypeId));
             if (!foundCertType)
             {
-                throw new ServiceResultException(StatusCodes.BadInvalidArgument, "Certificate type not valid for certificate group.");
+                throw new ServiceResultException(
+                    StatusCodes.BadInvalidArgument,
+                    "Certificate type not valid for certificate group.");
             }
 
             return certificateGroup;
@@ -788,28 +1050,25 @@ namespace Opc.Ua.Server
         /// <summary>
         /// Finds the <see cref="NamespaceMetadataState"/> node for the specified NamespaceUri.
         /// </summary>
-        /// <param name="namespaceUri"></param>
         private NamespaceMetadataState FindNamespaceMetadataState(string namespaceUri)
         {
             try
             {
                 // find ServerNamespaces node
-                NamespacesState serverNamespacesNode = FindPredefinedNode(ObjectIds.Server_Namespaces, typeof(NamespacesState)) as NamespacesState;
-                if (serverNamespacesNode == null)
+                if (FindPredefinedNode(ObjectIds.Server_Namespaces, typeof(NamespacesState))
+                    is not NamespacesState serverNamespacesNode)
                 {
                     Utils.LogError("Cannot find ObjectIds.Server_Namespaces node.");
                     return null;
                 }
 
-                IList<BaseInstanceState> serverNamespacesChildren = new List<BaseInstanceState>();
+                IList<BaseInstanceState> serverNamespacesChildren = [];
                 serverNamespacesNode.GetChildren(SystemContext, serverNamespacesChildren);
 
-                foreach (var namespacesReference in serverNamespacesChildren)
+                foreach (BaseInstanceState namespacesReference in serverNamespacesChildren)
                 {
                     // Find NamespaceMetadata node of NamespaceUri in Namespaces children
-                    NamespaceMetadataState namespaceMetadata = namespacesReference as NamespaceMetadataState;
-
-                    if (namespaceMetadata == null)
+                    if (namespacesReference is not NamespaceMetadataState namespaceMetadata)
                     {
                         continue;
                     }
@@ -818,24 +1077,21 @@ namespace Opc.Ua.Server
                     {
                         return namespaceMetadata;
                     }
-                    else
-                    {
-                        continue;
-                    }
                 }
 
-                IList<IReference> serverNamespacesReferencs = new List<IReference>();
+                IList<IReference> serverNamespacesReferencs = [];
                 serverNamespacesNode.GetReferences(SystemContext, serverNamespacesReferencs);
 
                 foreach (IReference serverNamespacesReference in serverNamespacesReferencs)
                 {
-                    if (serverNamespacesReference.IsInverse == false)
+                    if (!serverNamespacesReference.IsInverse)
                     {
                         // Find NamespaceMetadata node of NamespaceUri in Namespaces references
-                        NodeId nameSpaceNodeId = ExpandedNodeId.ToNodeId(serverNamespacesReference.TargetId, Server.NamespaceUris);
-                        NamespaceMetadataState namespaceMetadata = FindNodeInAddressSpace(nameSpaceNodeId) as NamespaceMetadataState;
-
-                        if (namespaceMetadata == null)
+                        var nameSpaceNodeId = ExpandedNodeId.ToNodeId(
+                            serverNamespacesReference.TargetId,
+                            Server.NamespaceUris);
+                        if (FindNodeInAddressSpace(
+                            nameSpaceNodeId) is not NamespaceMetadataState namespaceMetadata)
                         {
                             continue;
                         }
@@ -851,7 +1107,10 @@ namespace Opc.Ua.Server
             }
             catch (Exception ex)
             {
-                Utils.LogError(ex, "Error searching NamespaceMetadata for namespaceUri {0}.", namespaceUri);
+                Utils.LogError(
+                    ex,
+                    "Error searching NamespaceMetadata for namespaceUri {0}.",
+                    namespaceUri);
                 return null;
             }
         }
@@ -859,7 +1118,10 @@ namespace Opc.Ua.Server
         /// <summary>
         /// Clear NamespaceMetadata nodes cache in case nodes are added or deleted
         /// </summary>
-        private void ServerNamespacesChanged(ISystemContext context, NodeState node, NodeStateChangeMasks changes)
+        private void ServerNamespacesChanged(
+            ISystemContext context,
+            NodeState node,
+            NodeStateChangeMasks changes)
         {
             if ((changes & NodeStateChangeMasks.Children) != 0 ||
                 (changes & NodeStateChangeMasks.References) != 0)
@@ -877,9 +1139,7 @@ namespace Opc.Ua.Server
                 }
             }
         }
-        #endregion
 
-        #region Private Fields
         private class UpdateCertificateData
         {
             public NodeId SessionId;
@@ -901,10 +1161,9 @@ namespace Opc.Ua.Server
         }
 
         private ServerConfigurationState m_serverConfigurationNode;
-        private ApplicationConfiguration m_configuration;
-        private IList<ServerCertificateGroup> m_certificateGroups;
-        private CertificateStoreIdentifier m_rejectedStore;
-        private Dictionary<string, NamespaceMetadataState> m_namespaceMetadataStates = new Dictionary<string, NamespaceMetadataState>();
-        #endregion
+        private readonly ApplicationConfiguration m_configuration;
+        private readonly List<ServerCertificateGroup> m_certificateGroups;
+        private readonly CertificateStoreIdentifier m_rejectedStore;
+        private readonly Dictionary<string, NamespaceMetadataState> m_namespaceMetadataStates = [];
     }
 }

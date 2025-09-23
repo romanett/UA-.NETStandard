@@ -542,7 +542,7 @@ namespace Opc.Ua
         /// <summary>
         /// The semaphore file specified by the client is not valid.
         /// </summary>
-        public const uint BadSempahoreFileMissing = 0x80520000;
+        public const uint BadSemaphoreFileMissing = 0x80520000;
 
         /// <summary>
         /// The security token request type is not valid.
@@ -1133,6 +1133,11 @@ namespace Opc.Ua
         /// The operation is not allowed because a transaction is in progress.
         /// </summary>
         public const uint BadTransactionPending = 0x80E80000;
+
+        /// <summary>
+        /// The operation failed and all changes which were part of the transaction are rolled back.
+        /// </summary>
+        public const uint BadTransactionFailed = 0x80F10000;
 
         /// <summary>
         /// The device identity needs a ticket before it can be accepted.
