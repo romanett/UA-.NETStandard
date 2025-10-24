@@ -28,6 +28,7 @@
  * ======================================================================*/
 
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using Opc.Ua.Server;
 
@@ -85,10 +86,8 @@ namespace Opc.Ua.Sample
         {
             if (m_monitoredItems != null)
             {
-                for (int ii = 0; ii < m_monitoredItems.Count; ii++)
+                foreach (var monitoredItem in m_monitoredItems.Values)
                 {
-                    DataChangeMonitoredItem monitoredItem = m_monitoredItems[ii];
-
                     if (monitoredItem.AttributeId == attributeId && monitoredItem.MonitoringMode != MonitoringMode.Disabled)
                     {
                         return true;
@@ -156,11 +155,11 @@ namespace Opc.Ua.Sample
 
             if (m_monitoredItems == null)
             {
-                m_monitoredItems = new List<DataChangeMonitoredItem>();
+                m_monitoredItems = new ConcurrentDictionary<uint, DataChangeMonitoredItem>();
                 m_node.OnStateChanged = OnNodeChange;
             }
 
-            m_monitoredItems.Add(monitoredItem);
+            m_monitoredItems.TryAdd(monitoredItemId, monitoredItem);
 
             return monitoredItem;
         }
@@ -218,11 +217,11 @@ namespace Opc.Ua.Sample
         {
             if (m_monitoredItems != null)
             {
-                for (int ii = 0; ii < m_monitoredItems.Count; ii++)
+                foreach (var kvp in m_monitoredItems)
                 {
-                    if (Object.ReferenceEquals(monitoredItem, m_monitoredItems[ii]))
+                    if (Object.ReferenceEquals(monitoredItem, kvp.Value))
                     {
-                        m_monitoredItems.RemoveAt(ii);
+                        m_monitoredItems.TryRemove(kvp.Key, out _);
                         break;
                     }
                 }
@@ -239,10 +238,8 @@ namespace Opc.Ua.Sample
         {
             if (m_monitoredItems != null)
             {
-                for (int ii = 0; ii < m_monitoredItems.Count; ii++)
+                foreach (var monitoredItem in m_monitoredItems.Values)
                 {
-                    DataChangeMonitoredItem monitoredItem = m_monitoredItems[ii];
-
                     // check if the node has been deleted.
                     if ((masks & NodeStateChangeMasks.Deleted) != 0)
                     {
@@ -275,7 +272,7 @@ namespace Opc.Ua.Sample
         {
             if (m_eventSubscriptions == null)
             {
-                m_eventSubscriptions = new List<IEventMonitoredItem>();
+                m_eventSubscriptions = new ConcurrentDictionary<uint, IEventMonitoredItem>();
             }
 
             if (m_eventSubscriptions.Count == 0)
@@ -284,15 +281,7 @@ namespace Opc.Ua.Sample
                 m_node.SetAreEventsMonitored(context, true, true);
             }
 
-            for (int ii = 0; ii < m_eventSubscriptions.Count; ii++)
-            {
-                if (Object.ReferenceEquals(eventSubscription, m_eventSubscriptions[ii]))
-                {
-                    return;
-                }
-            }
-
-            m_eventSubscriptions.Add(eventSubscription);
+            m_eventSubscriptions.TryAdd(eventSubscription.Id, eventSubscription);
         }
 
         /// <summary>
@@ -302,20 +291,12 @@ namespace Opc.Ua.Sample
         {
             if (m_eventSubscriptions != null)
             {
-                for (int ii = 0; ii < m_eventSubscriptions.Count; ii++)
+                m_eventSubscriptions.TryRemove(eventSubscription.Id, out _);
+
+                if (m_eventSubscriptions.Count == 0)
                 {
-                    if (Object.ReferenceEquals(eventSubscription, m_eventSubscriptions[ii]))
-                    {
-                        m_eventSubscriptions.RemoveAt(ii);
-
-                        if (m_eventSubscriptions.Count == 0)
-                        {
-                            m_node.SetAreEventsMonitored(context, false, true);
-                            m_node.OnReportEvent = null;
-                        }
-
-                        break;
-                    }
+                    m_node.SetAreEventsMonitored(context, false, true);
+                    m_node.OnReportEvent = null;
                 }
             }
         }
@@ -330,9 +311,9 @@ namespace Opc.Ua.Sample
         {
             if (m_eventSubscriptions != null)
             {
-                for (int ii = 0; ii < m_eventSubscriptions.Count; ii++)
+                foreach (var eventSubscription in m_eventSubscriptions.Values)
                 {
-                    m_eventSubscriptions[ii].QueueEvent(e);
+                    eventSubscription.QueueEvent(e);
                 }
             }
         }
@@ -348,10 +329,10 @@ namespace Opc.Ua.Sample
         {
             if (m_eventSubscriptions != null)
             {
-                for (int ii = 0; ii < m_eventSubscriptions.Count; ii++)
+                foreach (var eventSubscription in m_eventSubscriptions.Values)
                 {
                     // only process items monitoring this node.
-                    if (!Object.ReferenceEquals(monitoredItem, m_eventSubscriptions[ii]))
+                    if (!Object.ReferenceEquals(monitoredItem, eventSubscription))
                     {
                         continue;
                     }
@@ -374,8 +355,8 @@ namespace Opc.Ua.Sample
         private IServerInternal m_server;
         private INodeManager m_nodeManager;
         private NodeState m_node;
-        private List<IEventMonitoredItem> m_eventSubscriptions;
-        private List<DataChangeMonitoredItem> m_monitoredItems;
+        private ConcurrentDictionary<uint, IEventMonitoredItem> m_eventSubscriptions;
+        private ConcurrentDictionary<uint, DataChangeMonitoredItem> m_monitoredItems;
         #endregion
     }
 }
