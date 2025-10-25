@@ -217,14 +217,7 @@ namespace Opc.Ua.Sample
         {
             if (m_monitoredItems != null)
             {
-                foreach (var kvp in m_monitoredItems)
-                {
-                    if (Object.ReferenceEquals(monitoredItem, kvp.Value))
-                    {
-                        m_monitoredItems.TryRemove(kvp.Key, out _);
-                        break;
-                    }
-                }
+                m_monitoredItems.TryRemove(monitoredItem.Id, out _);
             }
         }
 
