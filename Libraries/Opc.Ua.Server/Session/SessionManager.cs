@@ -103,22 +103,16 @@ namespace Opc.Ua.Server
         /// <summary>
         /// Starts the session manager.
         /// </summary>
-        public virtual async ValueTask StartupAsync(CancellationToken cancellationToken = default)
+        public virtual void Startup()
         {
-            await m_semaphoreSlim.WaitAsync(cancellationToken)
-                .ConfigureAwait(false);
-            try
+            lock (m_lock)
             {
                 // start thread to monitor sessions.
                 m_shutdownEvent.Reset();
 
-                _ = Task.Factory.StartNew(
-                    () => MonitorSessionsAsync(m_minSessionTimeout),
+                Task.Factory.StartNew(
+                    () => MonitorSessions(m_minSessionTimeout),
                     TaskCreationOptions.LongRunning | TaskCreationOptions.DenyChildAttach);
-            }
-            finally
-            {
-                m_semaphoreSlim.Release();
             }
         }
 
@@ -144,7 +138,7 @@ namespace Opc.Ua.Server
         /// Creates a new session.
         /// </summary>
         /// <exception cref="ServiceResultException"></exception>
-        public virtual async ValueTask<CreateSessionResult> CreateSessionAsync(
+        public virtual ISession CreateSession(
             OperationContext context,
             X509Certificate2 serverCertificate,
             string sessionName,
@@ -155,17 +149,18 @@ namespace Opc.Ua.Server
             X509Certificate2Collection clientCertificateChain,
             double requestedSessionTimeout,
             uint maxResponseMessageSize,
-            CancellationToken cancellationToken = default)
+            out NodeId sessionId,
+            out NodeId authenticationToken,
+            out byte[] serverNonce,
+            out double revisedSessionTimeout)
         {
-            NodeId sessionId = 0;
-            NodeId authenticationToken;
-            byte[] serverNonce;
-            double revisedSessionTimeout = requestedSessionTimeout;
+            sessionId = 0;
+            serverNonce = null;
+            revisedSessionTimeout = requestedSessionTimeout;
 
-            ISession session;
+            ISession session = null;
 
-            await m_semaphoreSlim.WaitAsync(cancellationToken).ConfigureAwait(false);
-            try
+            lock (m_lock)
             {
                 // check session count.
                 if (m_maxSessionCount > 0 && m_sessions.Count >= m_maxSessionCount)
@@ -253,30 +248,19 @@ namespace Opc.Ua.Server
                     throw new ServiceResultException(StatusCodes.BadTooManySessions);
                 }
             }
-            finally
-            {
-                m_semaphoreSlim.Release();
-            }
 
             // raise session related event.
             RaiseSessionEvent(session, SessionEventReason.Created);
 
             // return session.
-            return new CreateSessionResult
-            {
-                Session = session,
-                SessionId = sessionId,
-                AuthenticationToken = authenticationToken,
-                RevisedSessionTimeout = revisedSessionTimeout,
-                ServerNonce = serverNonce
-            };
+            return session;
         }
 
         /// <summary>
         /// Activates an existing session
         /// </summary>
         /// <exception cref="ServiceResultException"></exception>
-        public virtual async ValueTask<(bool IdentityContextChanged, byte[] ServerNonce)> ActivateSessionAsync(
+        public virtual bool ActivateSession(
             OperationContext context,
             NodeId authenticationToken,
             SignatureData clientSignature,
@@ -284,9 +268,9 @@ namespace Opc.Ua.Server
             ExtensionObject userIdentityToken,
             SignatureData userTokenSignature,
             StringCollection localeIds,
-            CancellationToken cancellationToken = default)
+            out byte[] serverNonce)
         {
-            byte[] serverNonce = null;
+            serverNonce = null;
 
             Nonce serverNonceObject = null;
 
@@ -300,9 +284,7 @@ namespace Opc.Ua.Server
                 throw new ServiceResultException(StatusCodes.BadSessionIdInvalid);
             }
 
-            await m_semaphoreSlim.WaitAsync(cancellationToken)
-                .ConfigureAwait(false);
-            try
+            lock (m_lock)
             {
                 // find session.
                 if (!m_sessions.TryGetValue(authenticationToken, out session))
@@ -336,10 +318,6 @@ namespace Opc.Ua.Server
                     out userTokenPolicy);
 
                 serverNonce = serverNonceObject.Data;
-            }
-            finally
-            {
-                m_semaphoreSlim.Release();
             }
             IUserIdentity identity = null;
             IUserIdentity effectiveIdentity = null;
@@ -411,7 +389,7 @@ namespace Opc.Ua.Server
             }
 
             // indicates that the identity context for the session has changed.
-            return (contextChanged, serverNonce);
+            return contextChanged;
         }
 
         /// <summary>
@@ -615,7 +593,7 @@ namespace Opc.Ua.Server
         /// <summary>
         /// Periodically checks if the sessions have timed out.
         /// </summary>
-        private async ValueTask MonitorSessionsAsync(object data)
+        private void MonitorSessions(object data)
         {
             try
             {
@@ -640,8 +618,7 @@ namespace Opc.Ua.Server
                             // raise audit event for session closed because of timeout
                             m_server.ReportAuditCloseSessionEvent(null, session, m_logger, "Session/Timeout");
 
-                            await m_server.CloseSessionAsync(null, session.Id, false)
-                                .ConfigureAwait(false);
+                            m_server.CloseSession(null, session.Id, false);
                         }
                         // if a session had no activity for the last m_minSessionTimeout milliseconds, send a keep alive event.
                         else if (session.ClientLastContactTime
@@ -665,7 +642,7 @@ namespace Opc.Ua.Server
             }
         }
 
-        private readonly SemaphoreSlim m_semaphoreSlim = new(1, 1);
+        private readonly Lock m_lock = new();
         private readonly IServerInternal m_server;
         private readonly ILogger m_logger;
         private readonly NodeIdDictionary<ISession> m_sessions;
@@ -805,7 +782,10 @@ namespace Opc.Ua.Server
         /// <inheritdoc/>
         public IList<ISession> GetSessions()
         {
-            return [.. m_sessions.Values];
+            lock (m_lock)
+            {
+                return [.. m_sessions.Values];
+            }
         }
 
         /// <inheritdoc/>

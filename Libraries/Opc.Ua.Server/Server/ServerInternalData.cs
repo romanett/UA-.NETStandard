@@ -30,8 +30,6 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
-using System.Threading;
-using System.Threading.Tasks;
 using Opc.Ua.Security.Certificates;
 
 namespace Opc.Ua.Server
@@ -475,25 +473,7 @@ namespace Opc.Ua.Server
             NodeId sessionId,
             bool deleteSubscriptions)
         {
-            CloseSessionAsync(context, sessionId, deleteSubscriptions)
-                .AsTask().GetAwaiter().GetResult();
-        }
-
-        /// <summary>
-        /// Closes the specified session.
-        /// </summary>
-        /// <param name="context">The context.</param>
-        /// <param name="sessionId">The session identifier.</param>
-        /// <param name="deleteSubscriptions">if set to <c>true</c> subscriptions are to be deleted.</param>
-        /// <param name="cancellationToken">The cancellationToken</param>
-        public async ValueTask CloseSessionAsync(
-            OperationContext context,
-            NodeId sessionId,
-            bool deleteSubscriptions,
-            CancellationToken cancellationToken = default)
-        {
-            await NodeManager.SessionClosingAsync(context, sessionId, deleteSubscriptions, cancellationToken)
-                .ConfigureAwait(false);
+            NodeManager.SessionClosingAsync(context, sessionId, deleteSubscriptions).AsTask().GetAwaiter().GetResult();
             SubscriptionManager.SessionClosing(context, sessionId, deleteSubscriptions);
             SessionManager.CloseSession(sessionId);
         }

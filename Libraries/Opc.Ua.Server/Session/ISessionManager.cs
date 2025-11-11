@@ -30,8 +30,6 @@
 using System;
 using System.Collections.Generic;
 using System.Security.Cryptography.X509Certificates;
-using System.Threading;
-using System.Threading.Tasks;
 
 namespace Opc.Ua.Server
 {
@@ -76,7 +74,7 @@ namespace Opc.Ua.Server
         /// <summary>
         /// Starts the session manager.
         /// </summary>
-        ValueTask StartupAsync(CancellationToken cancellationToken = default);
+        void Startup();
 
         /// <summary>
         /// Stops the session manager and closes all sessions.
@@ -98,7 +96,7 @@ namespace Opc.Ua.Server
         /// <summary>
         /// Creates a new session.
         /// </summary>
-        ValueTask<CreateSessionResult> CreateSessionAsync(
+        ISession CreateSession(
             OperationContext context,
             X509Certificate2 serverCertificate,
             string sessionName,
@@ -109,12 +107,15 @@ namespace Opc.Ua.Server
             X509Certificate2Collection clientCertificateChain,
             double requestedSessionTimeout,
             uint maxResponseMessageSize,
-            CancellationToken cancellationToken = default);
+            out NodeId sessionId,
+            out NodeId authenticationToken,
+            out byte[] serverNonce,
+            out double revisedSessionTimeout);
 
         /// <summary>
         /// Activates an existing session
         /// </summary>
-        ValueTask<(bool IdentityContextChanged, byte[] ServerNonce)> ActivateSessionAsync(
+        bool ActivateSession(
             OperationContext context,
             NodeId authenticationToken,
             SignatureData clientSignature,
@@ -122,7 +123,7 @@ namespace Opc.Ua.Server
             ExtensionObject userIdentityToken,
             SignatureData userTokenSignature,
             StringCollection localeIds,
-            CancellationToken cancellationToken = default);
+            out byte[] serverNonce);
 
         /// <summary>
         /// Closes the specified session.
@@ -141,37 +142,6 @@ namespace Opc.Ua.Server
         /// and that the sequence number is not out of order (update requests only).
         /// </remarks>
         OperationContext ValidateRequest(RequestHeader requestHeader, RequestType requestType);
-    }
-
-    /// <summary>
-    /// The result of a call to <see cref="ISessionManager.CreateSessionAsync"/>.
-    /// </summary>
-    public class CreateSessionResult
-    {
-        /// <summary>
-        /// The created Session.
-        /// </summary>
-        public required ISession Session { get; init; }
-
-        /// <summary>
-        /// The SessionID assigned to the session.
-        /// </summary>
-        public required NodeId SessionId { get; init; }
-
-        /// <summary>
-        /// The authentication token used to identify and authorize the client.
-        /// </summary>
-        public required NodeId AuthenticationToken { get; init; }
-
-        /// <summary>
-        /// The server nonce of the session.
-        /// </summary>
-        public required byte[] ServerNonce { get; init; }
-
-        /// <summary>
-        /// The revised session timeout.
-        /// </summary>
-        public required double RevisedSessionTimeout { get; init; }
     }
 
     /// <summary>

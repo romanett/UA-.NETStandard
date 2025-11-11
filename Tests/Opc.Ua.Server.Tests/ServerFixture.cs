@@ -322,17 +322,14 @@ namespace Opc.Ua.Server.Tests
         /// <summary>
         /// Stop the server.
         /// </summary>
-        public async Task StopAsync()
+        public Task StopAsync()
         {
-            if (Server != null)
-            {
-                await Server.StopAsync().ConfigureAwait(false);
-                Server.Dispose();
-                Server = null;
-            }
+            Server?.Stop();
+            Server?.Dispose();
+            Server = null;
             ActivityListener?.Dispose();
             ActivityListener = null;
-            await Task.Delay(100).ConfigureAwait(false);
+            return Task.Delay(100);
         }
 
         private readonly ITelemetryContext m_telemetry;

@@ -51,20 +51,16 @@ namespace Opc.Ua
         /// <summary>
         /// Stops the server and releases all resources.
         /// </summary>
-        ValueTask StopAsync(CancellationToken cancellationToken = default);
+        void Stop();
 
         /// <summary>
         /// Starts the server.
         /// </summary>
         /// <param name="configuration">The object that stores the configurable configuration information
         /// for a UA application</param>
-        /// <param name="cancellationToken">The cancellation token.</param>
         /// <param name="baseAddresses">The array of Uri elements which contains base addresses.</param>
         /// <returns>Returns a host for a UA service.</returns>
-        ValueTask<ServiceHost> StartAsync(
-            ApplicationConfiguration configuration,
-            CancellationToken cancellationToken = default,
-            params Uri[] baseAddresses);
+        ServiceHost Start(ApplicationConfiguration configuration, params Uri[] baseAddresses);
 
         /// <summary>
         /// Starts the server (called from a dedicated host process).
@@ -72,8 +68,7 @@ namespace Opc.Ua
         /// <param name="configuration">The object that stores the configurable configuration
         /// information for a UA application.
         /// </param>
-        /// <param name="cancellationToken">The cancellation token</param>
-        ValueTask StartAsync(ApplicationConfiguration configuration, CancellationToken cancellationToken = default);
+        void Start(ApplicationConfiguration configuration);
 
         /// <summary>
         /// Trys to get the secure channel id for an AuthenticationToken.

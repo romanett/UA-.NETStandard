@@ -32,7 +32,6 @@ using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Linq;
 using System.Threading;
-using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
 
 namespace Opc.Ua.Server
@@ -177,18 +176,17 @@ namespace Opc.Ua.Server
         }
 
         /// <inheritdoc />
-        protected override async ValueTask OnUpdateConfigurationAsync(ApplicationConfiguration configuration, CancellationToken cancellationToken = default)
+        protected override void OnUpdateConfiguration(ApplicationConfiguration configuration)
         {
-            await base.OnUpdateConfigurationAsync(configuration, cancellationToken)
-                .ConfigureAwait(false);
+            base.OnUpdateConfiguration(configuration);
             UpdateConfiguration(configuration);
         }
 
         /// <inheritdoc />
-        protected override ValueTask OnServerStoppingAsync(CancellationToken cancellationToken = default)
+        protected override void OnServerStopping()
         {
             DisposeTimer();
-            return base.OnServerStoppingAsync(cancellationToken);
+            base.OnServerStopping();
         }
 
         /// <summary>

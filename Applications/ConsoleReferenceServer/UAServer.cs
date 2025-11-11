@@ -207,7 +207,7 @@ namespace Quickstarts
                     await m_status.ConfigureAwait(false);
 
                     // Stop server and dispose
-                    await server.StopAsync().ConfigureAwait(false);
+                    server.Stop();
                 }
 
                 ExitCode = ExitCode.Ok;
